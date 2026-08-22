@@ -46,8 +46,6 @@ function emptyRun(): RunRecord {
 // Activate
 // ─────────────────────────────────────────────────────────────────────────────
 export function activate(context: vscode.ExtensionContext) {
-  console.log("=== ARC LENS PRO ACTIVATED ===");
-
   // Invalidate the resolved-interpreter cache the instant the setting actually changes.
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
@@ -739,6 +737,12 @@ async function launchAgent(
     // run's points, so the A/B overlay compared the active run against itself.
     // The same path made every user-initiated Stop end in a red ERROR banner.
     if (activeProcess !== runProcess) {
+      // This run was killed by a newer one starting. Its own batchTimer must
+      // not survive to flush stale events into the new run's panel later.
+      if (batchTimer) {
+        clearTimeout(batchTimer);
+        batchTimer = null;
+      }
       return;
     }
     activeProcess = undefined;
@@ -829,7 +833,6 @@ function getDashboardHtml(
   // We inline the HTML directly (avoids URI issues). Load from disk.
   const fs = require("fs");
   try {
-    console.log("=== getDashboardHtml: isPro =", isPro());
     let html = fs.readFileSync(
       path.join(context.extensionPath, "media", "dashboard.html"),
       "utf8"
