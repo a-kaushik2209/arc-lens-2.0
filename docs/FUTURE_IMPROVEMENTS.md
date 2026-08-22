@@ -765,6 +765,20 @@ says so in the log and the status strip, while the risk gauge beside it can stil
 report-only detection should contribute to a score that drives no action, which is a real
 design call rather than an oversight.
 
+**Gradient explosion cannot trigger anything on its own.** `run_recovery_agent` has exactly
+one call site, and `_handle_failure` only reaches it with `kind="numerical"` — that is, once
+the *loss* is already non-finite or past 1e6. The `grad_norm > GRAD_EXPLOSION_NORM` test lives
+inside the agent, so it can only latch clipping on for a run whose loss has already blown up.
+A run whose gradients spike while its loss stays finite — the case clipping is classically for
+— is measured, charted and risk-scored, and never clipped.
+
+Whether that is wrong is genuinely open. Making gradient explosion its own entry point means
+letting a signal act that has not been through the A/B gauntlet the four structural rules
+were, and two of those were deleted and two stripped of action for exactly the reason that
+sounds safe in the abstract. The honest options are to measure it on both arms first, or to
+leave it as is and stop describing `grad_norm > 50` as a trigger. The docs have been corrected
+to the latter; the measurement has not been done.
+
 **Adaptive telemetry ships switched off.** `ARC_METRIC_EVERY` defaults to `1` and is not
 exposed as a VS Code setting, so a default install emits one event per step and realises
 none of the reduction the mechanism is capable of. Measured in

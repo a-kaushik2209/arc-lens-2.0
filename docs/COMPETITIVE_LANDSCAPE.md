@@ -70,7 +70,8 @@ Two things are true and worth saying plainly:
 2. **The detection is rule-based thresholds, not ML.** `ARC_FUNDING_PROPOSAL.md` cites a "97.5%
    accuracy MLP failure predictor" from the core `arc-training` research; that classifier is
    *not* what ships in ARC Lens's live intervention path per `ARCHITECTURE.md` — the extension
-   trips on `isnan(loss) or isinf(loss) or |loss| > 1e6`, `grad_norm > 50`, and **two**
+   trips on `isnan(loss) or isinf(loss) or |loss| > 1e6` (with `grad_norm > 50` latching clipping
+   on once that has fired, rather than as a trigger of its own), and **two**
    report-only structural rules measured relative to each run's own baseline (effective rank
    below 50% of baseline, with that baseline captured only after a 200-step warmup; and a
    loss plateau against the run's own opening loss). If a judge asks "walk me through your ML-based prediction," the honest answer is

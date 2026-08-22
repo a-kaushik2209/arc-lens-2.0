@@ -139,12 +139,25 @@ flow ratio (early vs late layer gradients; needs ≥4 parameterised layers).
 
 ## Interventions
 
-| Action | Trigger |
-| :--- | :--- |
-| `rollback_and_reduce_lr` | Loss non-finite or exploded past 1e6 |
-| `enable_grad_clipping` | Gradient norm above 50 — applied by ARC, not just recommended |
-| *(report only — no action)* | Loss stalled 300+ steps **and** never improved past 60% of its opening value |
-| *(report only — no action)* | Effective rank below 50% of the run's own baseline |
+| Detected as | Trigger | Response |
+| :--- | :--- | :--- |
+| `numerical` | Loss non-finite or exploded past 1e6 | `rollback_and_reduce_lr`, **and** `enable_grad_clipping` if the gradient norm is also above 50 |
+| `loss_plateau` | Loss stalled 300+ steps **and** never improved past 60% of its opening value | **Report only — no action** |
+| `representation_collapse` | Effective rank below 50% of the run's own baseline | **Report only — no action** |
+
+The first column is the `kind` you see in the action log and the status strip, so the two
+report-only rules are identifiable there rather than appearing as unexplained anomalies. Both
+are excluded from the recovery path in code (`REPORT_ONLY_KINDS` in `_arc_bootstrap.py`), not
+merely left untriggered.
+
+**Gradient explosion is not an independent trigger, and this table used to imply it was.**
+`run_recovery_agent` has one call site, reached only once a `numerical` failure is already
+being handled — a non-finite or exploded *loss*. The `grad_norm > 50` test then runs inside
+the agent and latches clipping on for every later update. So a run whose gradients spike while
+its loss stays finite is charted and scored but never clipped: nothing brings the agent in.
+Whether that is the right boundary is open (see
+[`docs/FUTURE_IMPROVEMENTS.md`](docs/FUTURE_IMPROVEMENTS.md)); what it is not is what the
+earlier two-row table described.
 
 **A plateau is reported and not acted on, because acting on it was measured to make things
 worse.** It used to cut the learning rate. On the `lr=0.5` arm of the A/B that took a run

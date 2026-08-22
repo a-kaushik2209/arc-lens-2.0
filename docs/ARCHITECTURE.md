@@ -462,7 +462,7 @@ sits in the *analysis* path — the Failure Analyst panel — where latency is a
 | :--- | :--- | :--- |
 | `get_training_snapshot` | always, first | Builds the state the rules read |
 | `rollback_and_reduce_lr` | non-finite **or** `|loss| > 1e6` | Restore checkpoint, LR × 0.2 |
-| `enable_grad_clipping` | `grad_norm > 50`, once | Clip at 1.0 on every later update |
+| `enable_grad_clipping` | `grad_norm > 50`, once — **only while a `numerical` failure is already being handled**, since that is the sole path into the agent | Clip at 1.0 on every later update |
 | `reduce_learning_rate` | — | LR × 0.5. **Unreachable:** no structural rule reaches the agent any more (see §*Report only*), so nothing triggers this tool. Kept as a cross-file safety net, not as live behaviour |
 
 Two changes from the original design are worth noting.
