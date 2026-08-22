@@ -868,7 +868,7 @@ function openChatPanel(context: vscode.ExtensionContext) {
     { enableScripts: true, retainContextWhenHidden: true }
   );
 
-  chatPanel.webview.html = getChatHtml(getFriendlyModelName());
+  chatPanel.webview.html = getChatHtml(getFriendlyModelName(), chatHistory);
 
   chatPanel.onDidDispose(() => {
     cancelCurrentStream?.();
@@ -882,7 +882,8 @@ function openChatPanel(context: vscode.ExtensionContext) {
       const systemPrompt = buildSystemPrompt(
         metricHistory.toArray(),
         agentLog,
-        activeTargetFile
+        activeTargetFile,
+        currentRun.baselineMetrics
       );
 
       if (chatHistory.length === 0) {
@@ -971,8 +972,41 @@ function openGeneratorPanel(context: vscode.ExtensionContext) {
         if (!generatorPanel) return; // panel closed mid-stream
         const code = extractCodeBlock(fullResponse, req.outputFormat);
         if (!code) {
-          genPanel.webview.postMessage({ type: "error", text: "Failed to extract code from response. Try rephrasing your task description." });
+          const tail = fullResponse.slice(-200);
+          genPanel.webview.postMessage({
+            type: "error",
+            text: `Failed to extract code from response — no closing code fence found. The response may have been cut off. Last part of response: ${tail}`,
+          });
           return;
+        }
+
+        // Only .py scripts can be syntax-checked with py_compile; .ipynb is JSON,
+        // not Python source, so there is nothing to compile-check here.
+        let syntaxError: string | undefined;
+        if (req.outputFormat === "py") {
+          const tmpFile = path.join(require("os").tmpdir(), `arc_gen_${Date.now()}.py`);
+          fs.writeFileSync(tmpFile, code, "utf8");
+          try {
+            const pythonPath = await resolveInterpreter(tmpFile);
+            syntaxError = await new Promise<string | undefined>((resolve) => {
+              cp.execFile(pythonPath, ["-m", "py_compile", tmpFile], (err, _stdout, stderr) => {
+                resolve(err ? (stderr?.trim() || "Syntax error in generated script.") : undefined);
+              });
+            });
+          } finally {
+            fs.unlink(tmpFile, () => {});
+          }
+        }
+
+        if (syntaxError) {
+          const choice = await vscode.window.showErrorMessage(
+            `ARC Script Generator: the generated script failed a syntax check — ${syntaxError}`,
+            "Save Anyway (Unverified)"
+          );
+          if (choice !== "Save Anyway (Unverified)") {
+            genPanel.webview.postMessage({ type: "done" });
+            return;
+          }
         }
 
         const ext = req.outputFormat === "py" ? "py" : "ipynb";
@@ -986,7 +1020,12 @@ function openGeneratorPanel(context: vscode.ExtensionContext) {
 
         if (uri) {
           fs.writeFileSync(uri.fsPath, code, "utf8");
-          vscode.window.showInformationMessage(`✅ ARC-tested script saved: ${path.basename(uri.fsPath)}`);
+          const verified = req.outputFormat === "py" && !syntaxError;
+          vscode.window.showInformationMessage(
+            verified
+              ? `✅ ARC-tested script saved: ${path.basename(uri.fsPath)}`
+              : `Script saved (not syntax-verified): ${path.basename(uri.fsPath)}`
+          );
           vscode.window.showTextDocument(uri);
         }
         genPanel.webview.postMessage({ type: "done" });
@@ -1003,8 +1042,17 @@ function openGeneratorPanel(context: vscode.ExtensionContext) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Pro: Webview HTML helpers
 // ─────────────────────────────────────────────────────────────────────────────
-function getChatHtml(modelName: string): string {
+function getChatHtml(modelName: string, history: ChatMessage[]): string {
   const nonce = makeNonce();
+  // Replayed into the webview's JS state below so the visible transcript
+  // matches chatHistory, which survives panel close/reopen on the extension
+  // host even though the webview HTML is rebuilt empty each time.
+  const replayHistory = history
+    .filter((m) => m.role !== "system")
+    .map((m) => ({ role: m.role, content: m.content }));
+  const replayHistoryJson = JSON.stringify(replayHistory)
+    .replace(/</g, "\\u003c")
+    .replace(/'/g, "\\u0027");
   return `<!DOCTYPE html><html lang="en"><head>
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'nonce-${nonce}';">
@@ -1300,9 +1348,10 @@ header{
 </style></head><body>
 <header>
   <div class="title">ARC Analyst <span class="pro-badge">PRO</span> <span class="model-badge">${modelName}</span></div>
-  <button class="btn-clear" id="btn-clear">Clear</button>
+  <button class="btn-clear" id="btn-cancel" style="display:none" aria-label="Cancel response">Cancel</button>
+  <button class="btn-clear" id="btn-clear" aria-label="Clear chat">Clear</button>
 </header>
-<div id="messages">
+<div id="messages" aria-live="polite">
   <div class="empty-state" id="empty-state">
     <div class="empty-icon-wrapper">
       <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
@@ -1321,7 +1370,7 @@ header{
         <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
         Telemetry Attached
       </div>
-      <button class="btn-send" id="btn-send">
+      <button class="btn-send" id="btn-send" aria-label="Send message">
         <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
       </button>
     </div>
@@ -1383,16 +1432,22 @@ function scrollBottom(){const m=document.getElementById('messages');m.scrollTop=
 // Listeners rather than inline handlers: this panel renders model output into
 // the DOM, so it is the one webview where a nonce-only CSP matters most.
 document.getElementById('btn-clear').addEventListener('click', clearChat);
+document.getElementById('btn-cancel').addEventListener('click', () => vscode.postMessage({command:'cancel'}));
 document.getElementById('btn-send').addEventListener('click', sendMessage);
 const inputEl = document.getElementById('user-input');
 inputEl.addEventListener('keydown', handleKey);
 inputEl.addEventListener('input', () => autoResize(inputEl));
 
+function setStreaming(isStreaming){
+  streaming=isStreaming;
+  document.getElementById('btn-send').disabled=isStreaming;
+  document.getElementById('btn-cancel').style.display=isStreaming?'inline-flex':'none';
+}
+
 window.addEventListener('message',e=>{
   const msg=e.data;
   if(msg.type==='stream_start'){
-    streaming=true;
-    document.getElementById('btn-send').disabled=true;
+    setStreaming(true);
     streamEl=appendMsg('assistant','');
     streamEl.innerHTML='<span class="cursor"></span>';
   } else if(msg.type==='stream_chunk'){
@@ -1404,14 +1459,23 @@ window.addEventListener('message',e=>{
     }
   } else if(msg.type==='stream_done'){
     if(streamEl){streamEl.innerHTML=renderMarkdown(streamEl.dataset.raw||'');}
-    streaming=false;streamEl=null;
-    document.getElementById('btn-send').disabled=false;
+    streamEl=null;
+    setStreaming(false);
   } else if(msg.type==='stream_error'){
     if(streamEl){streamEl.innerHTML='<p style="color:#ff4444">Error: '+msg.text+'</p>';}
-    streaming=false;streamEl=null;
-    document.getElementById('btn-send').disabled=false;
+    streamEl=null;
+    setStreaming(false);
   }
 });
+
+// Replay chat history: chatHistory survives on the extension host across
+// panel close/reopen, but this HTML is rebuilt empty each time, so without
+// this the user sees a blank panel even though the model still has context.
+const initialHistory = JSON.parse('${replayHistoryJson}');
+if(initialHistory.length){
+  hideEmpty();
+  for(const m of initialHistory){ appendMsg(m.role==='assistant'?'assistant':'user', m.content); }
+}
 </script></body></html>`;
 }
 

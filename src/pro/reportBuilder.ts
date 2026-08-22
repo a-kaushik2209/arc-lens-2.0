@@ -34,6 +34,48 @@ function escapeHtml(value: unknown): string {
     .replace(/"/g, "&quot;");
 }
 
+// Same tiered GPU rate/wattage table as media/dashboard.html's savings ledger,
+// duplicated rather than shared: the webview and the extension host are
+// different JS runtimes here, and this table is small enough that a shared
+// module would cost more than it saves.
+// ponytail: kept in sync by hand with dashboard.html's GPU_RATE_TABLE; if the
+// two drift, promote to a shared JSON file.
+const GPU_RATE_TABLE: Array<[RegExp, number, string, number]> = [
+  [/h100/i, 3.5, "H100 on-demand list", 700],
+  [/a100/i, 2.0, "A100 on-demand list", 400],
+  [/l40|l4\b/i, 1.0, "L40/L4 on-demand list", 300],
+  [/a10\b|a10g/i, 0.75, "A10G on-demand list", 150],
+  [/v100/i, 0.9, "V100 on-demand list", 300],
+  [/t4\b/i, 0.35, "T4 on-demand list", 70],
+  [/rtx\s*(40|30)\d0/i, 0.2, "consumer GPU, cloud-equivalent estimate", 250],
+];
+const DEFAULT_GPU_RATE = 1.0;
+const DEFAULT_GPU_WATTS = 250;
+
+function resolveGpuRate(env: Record<string, unknown>): { rate: number; source: string; watts: number } {
+  const gpuName = typeof env.gpu === "string" ? env.gpu : "";
+  const configuredRate = typeof env.gpuHourlyRate === "number" ? env.gpuHourlyRate : 0;
+  let watts = DEFAULT_GPU_WATTS;
+  for (const [pattern, , , w] of GPU_RATE_TABLE) {
+    if (gpuName && pattern.test(gpuName)) {
+      watts = w;
+      break;
+    }
+  }
+  if (configuredRate > 0) {
+    return { rate: configuredRate, source: "your configured arcAgent.gpuHourlyRate", watts };
+  }
+  if (!gpuName) {
+    return { rate: DEFAULT_GPU_RATE, source: "no GPU detected — generic estimate", watts };
+  }
+  for (const [pattern, rate, label] of GPU_RATE_TABLE) {
+    if (pattern.test(gpuName)) {
+      return { rate, source: `${gpuName} · ${label}`, watts };
+    }
+  }
+  return { rate: DEFAULT_GPU_RATE, source: `${gpuName} · not in rate table, generic estimate`, watts };
+}
+
 function fmt(value: unknown): string {
   if (value === null || value === undefined) return "—";
   if (typeof value === "number") {
@@ -140,6 +182,7 @@ export function buildReportHtml(run: RunRecord, metrics: ReportMetric[]): string
   const interventions = run.events.filter((e) => e.type === "intervention");
   const unrecoverable = run.events.filter((e) => e.type === "unrecoverable");
   const degraded = run.events.filter((e) => e.type === "degraded");
+  const checkpointBudgets = run.events.filter((e) => e.type === "checkpoint_budget");
 
   const losses = metrics.map((m) => m.loss).filter((l): l is number => l !== null && isFinite(l));
   const finalLoss = losses.length ? losses[losses.length - 1] : null;
@@ -168,7 +211,7 @@ export function buildReportHtml(run: RunRecord, metrics: ReportMetric[]): string
 
   const timeline = run.events
     .filter((e) =>
-      ["failure_detected", "intervention", "unrecoverable", "degraded"].includes(e.type)
+      ["failure_detected", "intervention", "unrecoverable", "degraded", "checkpoint_budget"].includes(e.type)
     )
     .map((e) => {
       const label =
@@ -178,8 +221,18 @@ export function buildReportHtml(run: RunRecord, metrics: ReportMetric[]): string
           ? `Intervention — ${escapeHtml(e.action)}`
           : e.type === "unrecoverable"
           ? "Judged unrecoverable"
-          : `Degraded — ${escapeHtml(e.component)}`;
-      const detail = escapeHtml(e.detail ?? e.reason ?? e.message ?? "");
+          : e.type === "degraded"
+          ? `Degraded — ${escapeHtml(e.component)}`
+          : "Checkpoint budget";
+      const detail =
+        e.type === "checkpoint_budget"
+          ? escapeHtml(
+              typeof e.budget_mb === "number"
+                ? `Budget: ${Math.round(e.budget_mb)} MB` +
+                    (e.pruned_count ? ` (${e.pruned_count} pruned beyond the ring buffer to stay under budget)` : ", not yet exceeded")
+                : e.detail ?? e.reason ?? e.message ?? ""
+            )
+          : escapeHtml(e.detail ?? e.reason ?? e.message ?? "");
       return `<tr><td>${fmt(e.step)}</td><td class="k k-${escapeHtml(e.type)}">${label}</td><td>${detail}</td></tr>`;
     })
     .join("");
@@ -187,12 +240,35 @@ export function buildReportHtml(run: RunRecord, metrics: ReportMetric[]): string
   const env = run.environment ?? {};
   const summary = run.summary ?? {};
 
+  // Waste accounting: same labeled-assumption pattern as the dashboard's
+  // unrecoverable banner — a bare dollar/kWh figure would be the fabrication
+  // problem this codebase already refuses to have anywhere else.
+  const wasteEvent = unrecoverable[0];
+  let wasteText = "";
+  if (wasteEvent && typeof wasteEvent.elapsed_seconds === "number") {
+    const { rate, source, watts } = resolveGpuRate(env);
+    const mins = Math.floor(wasteEvent.elapsed_seconds / 60);
+    const secs = Math.round(wasteEvent.elapsed_seconds % 60);
+    const hours = wasteEvent.elapsed_seconds / 3600;
+    const dollars = hours * rate;
+    const kwh = hours * (watts / 1000);
+    const since =
+      typeof wasteEvent.last_checkpoint_step === "number"
+        ? `since last healthy checkpoint (step ${fmt(wasteEvent.last_checkpoint_step)})`
+        : "since run start (no checkpoint was saved yet)";
+    wasteText =
+      ` ⏱ ${mins}m ${secs}s burned ${since}.` +
+      ` <span class="assumption">💸 ~$${dollars.toFixed(2)} at $${rate.toFixed(2)}/hr (${escapeHtml(
+        source
+      )}) · 🔌 ~${kwh.toFixed(2)} kWh assuming ${watts}W typical draw for this tier.</span>`;
+  }
+
   const verdict = unrecoverable.length
     ? {
         cls: "bad",
         text: `ARC judged this run unrecoverable after ${fmt(
           unrecoverable[0]?.attempts
-        )} recovery attempts. Its recommendation was to stop the run rather than continue paying for it.`,
+        )} recovery attempts. Its recommendation was to stop the run rather than continue paying for it.${wasteText}`,
       }
     : interventions.length
     ? {
@@ -232,7 +308,8 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--mute
 td:first-child{font-variant-numeric:tabular-nums;width:64px;color:var(--muted)}
 .k{white-space:nowrap;font-weight:600}
 .k-failure_detected{color:#ef4444}.k-intervention{color:#22c55e}
-.k-unrecoverable{color:#ef4444}.k-degraded{color:#f59e0b}
+.k-unrecoverable{color:#ef4444}.k-degraded{color:#f59e0b}.k-checkpoint_budget{color:#8b5cf6}
+.assumption{color:var(--muted)}
 svg{width:100%;height:auto;background:var(--panel);border:1px solid var(--border);border-radius:8px}
 .tick{fill:var(--muted);font-size:10px}
 .empty{color:var(--muted);font-style:italic}
@@ -278,6 +355,14 @@ ${timeline ? `<table><thead><tr><th>Step</th><th>Event</th><th>Detail</th></tr><
 
 ${degraded.length ? `<h2>Degraded components</h2><ul>${degraded
       .map((d) => `<li><strong>${escapeHtml(d.component)}</strong> — ${escapeHtml(d.message)}</li>`)
+      .join("")}</ul>` : ""}
+
+${checkpointBudgets.length ? `<h2>Checkpoint budget</h2><ul>${checkpointBudgets
+      .map((b) => {
+        const budget = typeof b.budget_mb === "number" ? `${Math.round(b.budget_mb)} MB budget` : "budget";
+        const pruned = b.pruned_count ? ` — ${escapeHtml(b.pruned_count)} pruned beyond the ring buffer to stay under budget` : "";
+        return `<li>${escapeHtml(budget)}${pruned}</li>`;
+      })
       .join("")}</ul>` : ""}
 
 <footer>

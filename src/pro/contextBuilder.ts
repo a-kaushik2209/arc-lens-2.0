@@ -31,10 +31,16 @@ export interface AgentLogEntry {
 /**
  * Builds the LLM system prompt from the full run telemetry.
  */
+export interface BaselineSummary {
+  label: string;
+  points: Array<{ step: number; loss: number | null }>;
+}
+
 export function buildSystemPrompt(
   metrics: MetricPoint[],
   agentLog: AgentLogEntry[],
-  targetFile: string
+  targetFile: string,
+  baseline?: BaselineSummary
 ): string {
   const totalSteps = metrics.length;
   const failures = agentLog.filter((e) => e.type === "failure_detected");
@@ -106,6 +112,12 @@ export function buildSystemPrompt(
           )
           .join("\n");
 
+  const baselineSection = baseline?.points?.length
+    ? `\n## Baseline Comparison ("${baseline.label}")\n${baseline.points
+        .map((p) => `[Step ${p.step}] loss=${p.loss === null ? "NaN" : p.loss.toExponential(3)}`)
+        .join("\n")}\n`
+    : "";
+
   return `You are ARC Analyst, an expert ML training diagnostics AI integrated into ARC Lens, a VS Code extension for PyTorch training monitoring.
 
 ## Role
@@ -127,7 +139,7 @@ ${traceRows || "No data yet."}
 
 ## ARC Agent Event Log
 ${agentSummary}
-
+${baselineSection}
 ---
 Answer the user's question with full technical context. If they ask about a specific step, reference the trace data above. If you suggest code changes, show a before/after diff or a complete snippet.`;
 }

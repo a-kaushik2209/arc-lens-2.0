@@ -112,6 +112,11 @@ export function streamChatCompletion(
   };
 
   let buffer = "";
+  // Anthropic's SSE stream pairs an `event: <type>` line with the `data: `
+  // line that follows it; the event type is what tells you whether the data
+  // is a text delta or an end-of-stream marker, so it has to be tracked
+  // across chunks (the two lines can land in different `data` events).
+  let currentEvent = "";
 
   // Every terminal path below can be reached more than once for a single
   // request: the SSE stream sends `data: [DONE]`, and then the socket also
@@ -147,7 +152,12 @@ export function streamChatCompletion(
 
       for (const line of lines) {
         const trimmed = line.trim();
-        if (!trimmed || !trimmed.startsWith("data: ")) continue;
+        if (!trimmed) continue;
+        if (trimmed.startsWith("event: ")) {
+          currentEvent = trimmed.slice(7).trim();
+          continue;
+        }
+        if (!trimmed.startsWith("data: ")) continue;
         const data = trimmed.slice(6);
         if (data === "[DONE]") {
           finish();
@@ -155,9 +165,22 @@ export function streamChatCompletion(
         }
         try {
           const parsed = JSON.parse(data);
-          const delta = parsed?.choices?.[0]?.delta?.content || parsed?.delta?.text;
-          if (delta) {
-            onChunk(delta);
+          if (isAnthropic) {
+            // Anthropic never sends "data: [DONE]" — the stream ends with a
+            // `message_stop` event, and text only ever arrives on
+            // `content_block_delta` events shaped as
+            // {type:"content_block_delta", delta:{type:"text_delta", text}}.
+            if (currentEvent === "content_block_delta" && typeof parsed?.delta?.text === "string") {
+              onChunk(parsed.delta.text);
+            } else if (currentEvent === "message_stop") {
+              finish();
+              return;
+            }
+          } else {
+            const delta = parsed?.choices?.[0]?.delta?.content || parsed?.delta?.text;
+            if (delta) {
+              onChunk(delta);
+            }
           }
         } catch {
           // skip malformed SSE lines

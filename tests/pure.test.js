@@ -168,6 +168,33 @@ test("buildReportHtml draws the baseline arm when an A/B run exists", () => {
   assert.equal((html.match(/<path d="M/g) || []).length, 2);
 });
 
+test("buildReportHtml labels the unrecoverable waste estimate, never a bare number", () => {
+  const run = baseRun();
+  run.events.push({
+    type: "unrecoverable",
+    step: 200,
+    kind: "gradient_entropy_collapse",
+    attempts: 3,
+    elapsed_seconds: 125,
+    last_checkpoint_step: 150,
+  });
+  const html = buildReportHtml(run, [metric(1, 1)]);
+  assert.match(html, /2m 5s burned/);
+  assert.match(html, /since last healthy checkpoint \(step 150\)/);
+  assert.match(html, /class="assumption"/);
+  assert.match(html, /~\$[\d.]+ at \$[\d.]+\/hr \(RTX 3050/);
+  assert.match(html, /~[\d.]+ kWh assuming \d+W typical draw/);
+});
+
+test("buildReportHtml surfaces a checkpoint_budget event with its pruned count", () => {
+  const run = baseRun();
+  run.events.push({ type: "checkpoint_budget", step: 50, budget_mb: 512, pruned_count: 4 });
+  const html = buildReportHtml(run, [metric(1, 1)]);
+  assert.match(html, /Checkpoint budget/);
+  assert.match(html, /512 MB/);
+  assert.match(html, /4 pruned beyond the ring buffer/);
+});
+
 test("buildReportHtml breaks the line at a missing point instead of bridging it", () => {
   // A gap must read as absent data, not as a straight line through it — the
   // same principle that removed the dashboard's fabricated metrics.
