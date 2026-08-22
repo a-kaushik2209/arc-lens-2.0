@@ -757,22 +757,21 @@ function rolledBackSteps(detail) {
 function updateSavingsLedger(msg) {
   if (runStartTime === null) return;
 
-  const elapsedMs = Date.now() - runStartTime;
   const currentStep = steps.length ? steps[steps.length - 1] : 0;
   const lost = rolledBackSteps(msg.detail);
 
-  // Preserved = elapsed work that survived, not elapsed wall clock. The old
-  // figure charged the whole run — including the steps the rollback had just
-  // thrown away — and then asserted "without ARC this restarts from step 0",
-  // which overstated the saving twice over.
-  const survivingFraction = currentStep > 0 ? Math.max(0, currentStep - lost) / currentStep : 1;
-  const preservedMs = elapsedMs * survivingFraction;
-  const preservedMin = preservedMs / 60000;
-  const dollars = (preservedMs / 3600000) * gpuRate;
-
-  document.getElementById('ledger-time').textContent =
-    preservedMin < 1 ? '<1m' : Math.round(preservedMin) + 'm';
-  document.getElementById('ledger-cost').textContent = '$' + dollars.toFixed(2);
+  // The preserved figure has to keep counting, not freeze at the instant of the
+  // rescue. A numerical failure is caught within seconds — at step 6 of 1950 in
+  // the default demo — so a snapshot taken here reads "<1m / $0.00" and shows a
+  // successful recovery as having saved nothing. What was actually preserved is
+  // every second the run goes on to spend *not* being restarted from step 0, and
+  // that accrues for the rest of the run.
+  //
+  // Basis is unchanged and still conservative: elapsed wall clock scaled by the
+  // fraction of steps that survived the rollback, so the discarded steps are
+  // never counted as saved.
+  preservedLostSteps = lost;
+  startPreservedMeter();
 
   const failStep = failures.length ? failures[failures.length - 1].step : currentStep;
   const lostNote = lost
@@ -783,13 +782,6 @@ function updateSavingsLedger(msg) {
     `<br><span class="assumption">Training preserved by the recovery, priced at ` +
     `$${gpuRate.toFixed(2)}/hr (${escapeText(gpuRateSource)}).${lostNote} ` +
     `The comparison is against restarting this run from step 0.</span>`;
-  // The run was actually rescued, so the card reverts to what it preserved and
-  // the waste counter stops -- leaving it running would keep charging the user
-  // for time after the recovery that made it moot.
-  stopWasteCounter();
-  document.getElementById('ledger-time-label').textContent = 'Training Preserved';
-  document.getElementById('ledger-cost-label').textContent = 'Compute Not Re-Spent';
-  document.getElementById('ledger-card').classList.add('active');
 }
 
 function escapeText(v) {
@@ -1376,6 +1368,39 @@ function stopRunMeter() {
   if (runMeterTimer !== null) { clearInterval(runMeterTimer); runMeterTimer = null; }
 }
 
+// ── Preserved-compute meter — live after a successful rescue ────────────────
+let preservedTimer = null;
+let preservedLostSteps = 0;
+
+function renderPreserved() {
+  if (runStartTime === null) return;
+  const currentStep = steps.length ? steps[steps.length - 1] : 0;
+  const surviving = currentStep > 0
+    ? Math.max(0, currentStep - preservedLostSteps) / currentStep
+    : 1;
+  const ms = (Date.now() - runStartTime) * surviving;
+  const secs = ms / 1000;
+  document.getElementById('ledger-time').textContent =
+    secs < 90 ? `${secs.toFixed(0)}s` : `${(secs / 60).toFixed(1)}m`;
+  document.getElementById('ledger-cost').textContent =
+    '$' + ((ms / 3600000) * gpuRate).toFixed(4);
+}
+
+function startPreservedMeter() {
+  stopRunMeter();
+  stopWasteCounter();
+  stopPreservedMeter();
+  document.getElementById('ledger-time-label').textContent = 'Training Preserved';
+  document.getElementById('ledger-cost-label').textContent = 'Compute Not Re-Spent';
+  document.getElementById('ledger-card').classList.add('active');
+  renderPreserved();
+  preservedTimer = setInterval(renderPreserved, 1000);
+}
+
+function stopPreservedMeter() {
+  if (preservedTimer !== null) { clearInterval(preservedTimer); preservedTimer = null; }
+}
+
 function stopWasteCounter() {
   if (wasteTimer !== null) { clearInterval(wasteTimer); wasteTimer = null; }
   wasteSince = null;
@@ -1452,6 +1477,8 @@ function handleMessage(msg) {
       window._arcNonfinite = {};
       stopWasteCounter();
       stopRunMeter();
+      stopPreservedMeter();
+      preservedLostSteps = 0;
       document.getElementById('ledger-time-label').textContent = 'Training Preserved';
       document.getElementById('ledger-cost-label').textContent = 'Compute Not Re-Spent';
       document.getElementById('ledger-time').textContent = '0m';
@@ -1783,6 +1810,7 @@ function handleMessage(msg) {
       // accruing against a process that is no longer burning anything.
       stopWasteCounter();
       stopRunMeter();
+      stopPreservedMeter();
       resetStopButtons();
       break;
 
