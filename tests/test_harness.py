@@ -395,6 +395,46 @@ class TestLossPlateau(unittest.TestCase):
         self.assertIsNotNone(result, "a run pinned at exactly zero still stalls")
         self.assertEqual(result[0], "loss_plateau")
 
+    def test_a_converged_negative_objective_is_not_a_silent_death(self):
+        """A negative loss must not defeat the progress guard.
+
+        The guard is `best / opening < RATIO`. That test inverts under a sign
+        flip, so for a negative-valued objective — a WGAN critic, a continuous-
+        distribution NLL, Dice-minus-one — it stops separating a converged run
+        from a dead one. The non-positive branch reported the plateau anyway,
+        which fails *open*: this run improves from -0.5 to -5.0, a genuine 10x,
+        then sits at its best for the patience window exactly as any converged
+        run does, and was reported as a silent death three times before being
+        silenced.
+
+        That is the same false positive LOSS_PLATEAU_PROGRESS_RATIO was added to
+        prevent, and the same failure mode both deleted structural rules were
+        deleted for.
+        """
+        m, mod = self._monitor()
+        for _ in range(mod.LOSS_PLATEAU_OPENING_SAMPLES):
+            m.check_plateau(-0.5)
+        for _ in range(500):
+            self.assertIsNone(
+                m.check_plateau(-5.0),
+                "a negative-objective run that improved 10x was called a silent death",
+            )
+
+    def test_a_negative_objective_that_never_improves_is_not_claimed_either(self):
+        """The cost of the fix above, asserted rather than left implicit.
+
+        With a negative opening the ratio carries no information in either
+        direction, so the rule cannot tell this genuinely dead run from the
+        converged one above and reports neither. That is a real miss, and it is
+        the deliberate choice: every other guard in the harness fails closed, and
+        this project does not claim a failure it cannot substantiate.
+        """
+        m, mod = self._monitor()
+        for _ in range(mod.LOSS_PLATEAU_OPENING_SAMPLES):
+            m.check_plateau(-0.5)
+        for _ in range(500):
+            self.assertIsNone(m.check_plateau(-0.5))
+
     def test_a_dead_run_still_fires_with_the_progress_guard(self):
         """The guard must not disarm the rule it is guarding."""
         m, _ = self._monitor()

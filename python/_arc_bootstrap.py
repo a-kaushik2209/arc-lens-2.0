@@ -655,13 +655,27 @@ class OptimizerMonitor:
         # ponytail: first-loss reference, revisit if fine-tuning runs appear.
         opening = statistics.median(self.opening_losses) if self.opening_losses else 0.0
 
-        # A non-positive opening reference means the ratio is undefined, not that
-        # the run is healthy. A loss that starts at exactly 0.0 is degenerate —
-        # and dividing by it in the message below would raise ZeroDivisionError
-        # here, inside the path that runs while a failure is being handled. Report
-        # the stall without the progress figure rather than inventing one or
-        # throwing.
-        if opening <= 0:
+        # A *negative* opening reference is not degenerate — it is ordinary for a
+        # WGAN critic, a continuous-distribution NLL, or Dice-minus-one. But the
+        # `best / opening < RATIO` test inverts under a sign flip, so the progress
+        # guard this rule depends on silently stops working, and a run that
+        # improved from -0.5 to -5.0 (10x) and then sat at its best for the
+        # patience window — routine on a converged run, per the comments above —
+        # was reported as a silent death. That is exactly the false positive
+        # LOSS_PLATEAU_PROGRESS_RATIO exists to prevent, and the failure mode both
+        # deleted structural rules were deleted for. The rule cannot distinguish
+        # the two cases here, so it says nothing: every other guard in this file
+        # fails closed.
+        if opening < 0:
+            return None
+
+        # An opening of exactly 0.0 is a different case, and firing is deliberate.
+        # A loss pinned at exactly zero from the opening samples onward has not
+        # converged to zero, it has never moved — normally a broken objective. The
+        # ratio is undefined rather than inverted, so the message below omits the
+        # progress figure rather than dividing by zero, which would throw inside
+        # the path that runs while a failure is being handled.
+        if opening == 0:
             return (
                 "loss_plateau",
                 f"loss has failed to improve on its best value of {self.best_loss:.4f} "
@@ -1117,7 +1131,12 @@ def _evict_stale_monitors() -> None:
         _key, victim = next(iter(MONITORS.items()))
         MONITORS.pop(_key, None)
         try:
-            victim.release()
+            # `release()` lives on CheckpointStore, not on the monitor — MONITORS
+            # holds monitors, so `victim.release()` raised AttributeError every
+            # time and the bare except swallowed it. The cleanup this eviction
+            # exists to perform, including detaching the arc collector's hooks
+            # from the evicted model, had therefore never once run.
+            victim.store.release()
         except Exception:
             pass
 
