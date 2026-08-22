@@ -202,3 +202,32 @@ test("buildReportHtml breaks the line at a missing point instead of bridging it"
   const path = html.match(/<path d="([^"]+)"/)[1];
   assert.equal((path.match(/M/g) || []).length, 2, "expected the path to restart after the gap");
 });
+
+// ── Regressions found by review, 2026-08-22 ─────────────────────────────────
+
+test("extractCodeBlock: a longer language tag does not leak into the code", () => {
+  // "```" + lang + "\s*" matched a prefix, so ```python3 put a stray "3" at the
+  // head of an otherwise valid script and py_compile failed on line 1.
+  assert.equal(extractCodeBlock("```python3\nimport torch\n```", "py"), "import torch");
+  assert.equal(extractCodeBlock("```python\nimport torch\n```", "py"), "import torch");
+});
+
+test("extractCodeBlock: a fenced block containing fences is not truncated", () => {
+  // A lazy body stopped at the first inner ```, which cut generated notebooks
+  // mid-string whenever a markdown cell held a fenced snippet — invalid JSON
+  // written out as a corrupt .ipynb.
+  const nb = '```json\n{"cells":[{"source":["```bash\\n","pip install torch\\n","```\\n"]}]}\n```';
+  const out = extractCodeBlock(nb, "ipynb");
+  assert.doesNotThrow(() => JSON.parse(out), "notebook JSON must survive intact");
+});
+
+test("buildSystemPrompt survives a metric with no numeric fields", () => {
+  // Any stdout line parsing as JSON with type "metric" reaches the history —
+  // a user script printing its own dict is enough. `lr` was read unfiltered
+  // and .toExponential() called on undefined, throwing inside the async chat
+  // handler and leaving the AI Analyst silent with no error surfaced.
+  assert.doesNotThrow(() => buildSystemPrompt([{ step: 1 }], [], "f.py", undefined));
+  assert.doesNotThrow(() =>
+    buildSystemPrompt([{ step: 1, loss: NaN, grad_norm: undefined, lr: null }], [], "f.py", undefined)
+  );
+});

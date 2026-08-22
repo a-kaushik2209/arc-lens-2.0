@@ -47,9 +47,11 @@ export function buildSystemPrompt(
   const interventions = agentLog.filter((e) => e.type === "intervention");
 
   // Summarize loss trajectory
-  const lossValues = metrics
-    .map((m) => m.loss)
-    .filter((l): l is number => l !== null);
+  // `l !== null` alone let `undefined` through while the predicate claimed
+  // otherwise. Ingest now normalises absent fields to null, but this is the
+  // formatter's own guard: it must not depend on that to avoid throwing.
+  const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+  const lossValues = metrics.map((m) => m.loss).filter(isNum);
   // reduce, not Math.max(...array): the metric history is capped at 10 000
   // entries, and spreading an array that size into a call is close enough to
   // the engine's argument limit that raising the cap would turn this into a
@@ -64,11 +66,11 @@ export function buildSystemPrompt(
     : "N/A";
 
   // Summarize gradient norms
-  const gradValues = metrics.map((m) => m.grad_norm).filter((g) => typeof g === "number");
+  const gradValues = metrics.map((m) => m.grad_norm).filter(isNum);
   const gradMax = gradValues.length ? maxOf(gradValues).toExponential(3) : "N/A";
 
   // Last few LR values
-  const lrValues = metrics.map((m) => m.lr);
+  const lrValues = metrics.map((m) => m.lr).filter(isNum);
   const lrFinal = lrValues.length
     ? lrValues[lrValues.length - 1].toExponential(3)
     : "N/A";

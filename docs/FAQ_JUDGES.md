@@ -529,7 +529,7 @@ One item cannot be closed from here.
 | Fixed | M-8 | Nonce CSP, all 22 inline handlers converted |
 | Fixed | M-9 | Interpreter resolved via the Python extension |
 | Fixed | M-10 | Dead license code and the hardcoded JWT backdoor deleted |
-| Fixed | L-1…L-11 | Tail flush, batch-timer race, ring buffer, panel leak, reduce, 131 tests + CI |
+| Fixed | L-1…L-11 | Tail flush, batch-timer race, ring buffer, panel leak, reduce, 134 tests + CI |
 | **Owner action** | C-1 | Source side fully clean and CI-guarded; the four *published* `.vsix` files still contain the old secret and need revocation + supersession |
 
 Second review pass, over the code the table above describes as fixed:

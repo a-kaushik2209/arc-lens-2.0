@@ -88,10 +88,34 @@ Remember: plain PyTorch with no ARC imports, a scalar \`loss.backward()\` follow
  */
 export function extractCodeBlock(response: string, format: OutputFormat): string | null {
   const lang = format === "py" ? "python" : "json";
-  const regex = new RegExp("```" + lang + "\\s*([\\s\\S]*?)```", "i");
-  const match = response.match(regex);
+
+  // The opening fence must run to end-of-line before the body starts.
+  // "```" + lang + "\\s*" matched a *prefix* of the tag, so a response opening
+  // ```python3 matched "python" and then `\s*` matched nothing, putting the
+  // leftover "3" at the head of the extracted code — a valid script that then
+  // failed py_compile on line 1.
+  const fenced = new RegExp("```" + lang + "[^\\n]*\\n([\\s\\S]*)```", "i");
+  const match = response.match(fenced);
   if (match) return match[1].trim();
-  // Fallback: return raw if no code fence found
-  const anyFence = response.match(/```[\s\S]*?\n([\s\S]*?)```/);
-  return anyFence ? anyFence[1].trim() : null;
+
+  // Any fenced block, same greedy body.
+  //
+  // Both patterns are greedy to the *last* closing fence rather than the first.
+  // A lazy body stops at the first ``` inside the block, which truncates any
+  // notebook whose markdown cells contain a fenced snippet — routine in a
+  // generated Colab notebook, and it produced invalid JSON saved as a corrupt
+  // .ipynb. The trailing text after a final fence is prose we do not want, and
+  // the model is asked for exactly one block, so the last fence is the right
+  // terminator.
+  const anyFence = response.match(/```[^\n]*\n([\s\S]*)```/);
+  if (anyFence) return anyFence[1].trim();
+
+  // No fence at all returns null, deliberately. A model that refuses ("I can't
+  // help with that") or answers in prose would otherwise be written straight
+  // into a .py or .ipynb file as though it were the generated script. The .py
+  // path would at least fail the py_compile check downstream; the notebook path
+  // has no such check. An honest "no code fence found" beats a file containing
+  // an apology, so the cost — discarding a bare script from a model that took
+  // "emit nothing but code" literally — is accepted.
+  return null;
 }

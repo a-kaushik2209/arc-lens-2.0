@@ -682,7 +682,31 @@ async function launchAgent(
     }
 
     if (parsed.type === "metric") {
-      metricHistory.push(parsed as MetricPoint);
+      // Normalise before storing, rather than guarding at each of the six
+      // places that later format these fields.
+      //
+      // Anything on stdout that parses as JSON with type "metric" lands here,
+      // including a user script printing its own dict — `{"type":"metric",
+      // "step":1}` is enough. Every consumer then assumed the numeric fields
+      // were present: `lr` was read unfiltered and `.toExponential()` called on
+      // it, throwing inside the async chat handler and leaving the AI Analyst
+      // silent with no error shown. The loss filter had the same hole, its
+      // `l is number` predicate rejecting only `null` while letting `undefined`
+      // through.
+      //
+      // A missing value becomes `null`, which every formatter already renders
+      // as a gap. An absent measurement is not a bad one — see the finite
+      // guard in the harness for the same rule applied at the source.
+      const num = (v: unknown): number | null =>
+        typeof v === "number" && Number.isFinite(v) ? v : null;
+      metricHistory.push({
+        ...parsed,
+        step: typeof parsed.step === "number" ? parsed.step : metricHistory.length + 1,
+        loss: num(parsed.loss),
+        grad_norm: num(parsed.grad_norm),
+        lr: num(parsed.lr),
+        gpu_mem_mb: num(parsed.gpu_mem_mb),
+      } as MetricPoint);
     } else if (
       parsed.type === "failure_detected" ||
       parsed.type === "intervention" ||

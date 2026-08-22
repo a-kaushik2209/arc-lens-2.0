@@ -247,8 +247,13 @@ export function buildReportHtml(run: RunRecord, metrics: ReportMetric[]): string
   let wasteText = "";
   if (wasteEvent && typeof wasteEvent.elapsed_seconds === "number") {
     const { rate, source, watts } = resolveGpuRate(env);
-    const mins = Math.floor(wasteEvent.elapsed_seconds / 60);
-    const secs = Math.round(wasteEvent.elapsed_seconds % 60);
+    // Round to whole seconds first, then split. Flooring the minutes while
+    // rounding the remainder independently renders "1m 60s" for 119.6s — and
+    // fractional seconds are the norm here, since the harness reports this to
+    // three decimal places. This is the most-read line of the report.
+    const whole = Math.round(wasteEvent.elapsed_seconds);
+    const mins = Math.floor(whole / 60);
+    const secs = whole % 60;
     const hours = wasteEvent.elapsed_seconds / 3600;
     const dollars = hours * rate;
     const kwh = hours * (watts / 1000);

@@ -859,7 +859,7 @@ Mirrors the `chatPanel` lifecycle, as suggested.
 a prompt from a full 10 000-entry history, which is the case that would have thrown.
 
 ### L-6 — No tests, no CI, no linter
-**Status: fixed. 131 tests across six suites, plus CI.**
+**Status: fixed. 134 tests across six suites, plus CI.**
 - `tests/pure.test.js` (17) — `extractCodeBlock`, `buildScriptGenMessages`,
   `buildSystemPrompt`, `buildReportHtml`, including XSS escaping, the 10 000-entry case, and
   that a missing point breaks the chart line rather than being bridged.
