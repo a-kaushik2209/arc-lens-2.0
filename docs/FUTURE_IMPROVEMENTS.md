@@ -785,19 +785,25 @@ sounds safe in the abstract. The honest options are to measure it on both arms f
 leave it as is and stop describing `grad_norm > 50` as a trigger. The docs have been corrected
 to the latter; the measurement has not been done.
 
-**Adaptive telemetry ships switched off.** `ARC_METRIC_EVERY` defaults to `1` and is not
-exposed as a VS Code setting, so a default install emits one event per step and realises
-none of the reduction the mechanism is capable of. Measured in
-[`WASTE_REDUCTION.md`](WASTE_REDUCTION.md): coalescing to every 10 steps cut stdout from
-108,053 to 30,019 bytes over a fixed 390 steps (−72.2%) with wall clock flat across arms,
-so the saving is real and free. It is off by default because raising the interval also
-thins the dashboard's chart resolution, and choosing that trade-off on the user's behalf
-is a product decision rather than a code change — but the current state is the worst of
-both, since nobody can opt in without setting an environment variable the extension never
-surfaces. Wiring it to a setting alongside `arcAgent.maxCheckpointMB` is small; picking the
-default is the actual open question. Note also that the densify-under-risk path
-(`ARC_METRIC_EVERY_DENSE`) was never exercised in those runs — risk stayed `LOW`
-throughout — so its behaviour under sustained elevated risk is untested.
+**Adaptive telemetry is now reachable — but the default is still 1.** `ARC_METRIC_EVERY` had
+no way in: nothing set it and no setting exposed it, so a default install emitted one event per
+step and realised none of the measured −72.2% reduction. It is now wired to
+`arcAgent.telemetryEvery`, so the saving is opt-in rather than unreachable. The default stays at
+`1` deliberately — raising it thins the dashboard's chart resolution, and choosing that
+trade-off on the user's behalf is a product decision — but the open item has shrunk from "built
+and unusable" to "built, usable, off by default". Note also that the densify-under-risk path
+(`ARC_METRIC_EVERY_DENSE`) was never exercised in the measured runs, since risk stayed `LOW`
+throughout, so its behaviour under sustained elevated risk is untested.
+
+**The Resources Conserved panel's counterfactual is the weakest claim in the UI.** It prices
+what a rescued run did not have to re-spend, against the alternative of that run dying. That
+alternative is the right one for an unattended run and the wrong one for a supervised one: a
+practitioner who sees a NaN fixes the learning rate rather than re-running the same
+configuration, and `experiment_ab.json` shows `lr=0.03` reaching **87.15%** where the rescued
+`lr=5.0` run reaches **46.59%**. The panel says so in its own assumption line rather than
+leaving the reader to find it, but the underlying limitation is real: ARC's saving is measured
+against *this run dying*, never against *a better run*. Quantifying the supervised case would
+need a study of what practitioners actually do after a NaN, which has not been done.
 
 **Nothing in the test suite instantiates the real `arc` collectors.** The structural tests
 feed synthetic `advanced` dictionaries straight into `check_structural()`, which is the right

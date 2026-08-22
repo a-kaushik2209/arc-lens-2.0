@@ -2,7 +2,7 @@
   "name": "arc-lens",
   "displayName": "ARC Lens - Resilient ML Trainer",
   "description": "A real-time PyTorch training dashboard and automated recovery controller built for the ARC framework, featuring weight rollbacks, learning rate adaptation, and AI failure diagnostics.",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "publisher": "arclens",
   "repository": {
     "type": "git",
@@ -14,9 +14,17 @@
   },
   "license": "AGPL-3.0-only",
   "icon": "media/logo.png",
-  "engines": { "vscode": "^1.85.0" },
-  "categories": ["Machine Learning", "Visualization", "Debuggers"],
-  "activationEvents": ["onLanguage:python"],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Machine Learning",
+    "Visualization",
+    "Debuggers"
+  ],
+  "activationEvents": [
+    "onLanguage:python"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
@@ -99,6 +107,12 @@
           "type": "number",
           "default": 512,
           "description": "Maximum host RAM (in MB) the checkpoint ring buffer may use during a run. Oldest snapshots are pruned first when a new checkpoint would exceed this."
+        },
+        "arcAgent.telemetryEvery": {
+          "type": "number",
+          "default": 1,
+          "minimum": 1,
+          "description": "Emit one dashboard metric event every N optimizer steps. 1 sends every step. Raising it cuts telemetry volume roughly proportionally — measured at -72.2% for N=10 over a fixed 390-step run, with no wall-clock cost — at the price of coarser chart resolution. Risk detection is unaffected: loss history and the risk score are computed every step regardless, and emission densifies automatically while risk is elevated."
         }
       }
     }

@@ -250,6 +250,8 @@ save the run — are in [`docs/EXPERIMENT_RESULTS.md`](docs/EXPERIMENT_RESULTS.m
 | `arcAgent.gpuHourlyRate` | `0` | Your GPU's hourly cost. `0` estimates from the detected device |
 | `arcAgent.openRouterKey` | `""` | API key for the AI features. Provider inferred from the prefix |
 | `arcAgent.llmModel` | `google/gemini-2.5-flash:free` | Model for the AI features |
+| `arcAgent.telemetryEvery` | `1` | Emit one metric event every N optimizer steps. Raising it cuts telemetry volume roughly proportionally — **−72.2 % measured at N=10**, at no wall-clock cost — for coarser chart resolution. Risk detection is unaffected: loss history and risk are computed every step regardless |
+| `arcAgent.maxCheckpointMB` | `512` | Host RAM ceiling for the rollback ring buffer. Oldest snapshots are pruned first |
 
 Harness behaviour is tunable through environment variables (`ARC_ADVANCED_EVERY`,
 `ARC_CHECKPOINT_EVERY`, `ARC_MAX_ATTEMPTS`, …) — see

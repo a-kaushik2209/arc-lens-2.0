@@ -338,6 +338,35 @@ header {
 .risk-progress-bar { width: 100%; height: 3px; background: var(--grid-line); border-radius: 2px; margin-top: 8px; overflow: hidden; }
 .risk-progress-fill { height: 100%; width: 0%; background: var(--accent-green); transition: width 0.3s ease, background-color 0.3s ease; }
 
+/* Resources Conserved — the challenge's own five dimensions, counterfactual.
+   Everything else on this dashboard reports what the run is doing; this
+   reports what the user did not have to spend. */
+.saved-card {
+  display: none; grid-column: 1 / -1; margin-bottom: 14px; padding: 16px 18px;
+  background: var(--panel-bg); border: 1px solid var(--panel-border);
+  border-left: 3px solid var(--accent-green); border-radius: 10px; box-shadow: var(--panel-shadow);
+}
+.saved-card.active { display: block; }
+.saved-title {
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--accent-green); margin-bottom: 12px;
+}
+.saved-grid { display: flex; gap: 30px; flex-wrap: wrap; }
+.saved-item { min-width: 108px; }
+.saved-value {
+  font-size: 19px; font-weight: 700; font-family: 'JetBrains Mono', monospace;
+  color: var(--text-primary); letter-spacing: -0.01em;
+}
+.saved-label {
+  font-size: 10.5px; color: var(--text-secondary); text-transform: uppercase;
+  letter-spacing: 0.05em; margin-top: 3px;
+}
+.saved-note {
+  margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--panel-border);
+  font-size: 11.5px; color: var(--text-secondary); font-family: 'JetBrains Mono', monospace;
+}
+.saved-note .assumption { color: var(--text-tertiary); }
+
 /* Compute-savings ledger — appears on the first intervention */
 .ledger-card {
   background: linear-gradient(135deg, rgba(34, 197, 94, 0.08), rgba(34, 197, 94, 0.02));
@@ -539,6 +568,35 @@ header {
       </div>
     </div>
   </div>
+
+  <!-- Resources Conserved: the counterfactual, across the dimensions the
+       challenge names — computation, time, bandwidth, storage, repeated effort. -->
+  <section class="saved-card" id="saved-card" aria-live="polite" aria-label="Resources conserved">
+    <div class="saved-title">Resources Conserved</div>
+    <div class="saved-grid">
+      <div class="saved-item">
+        <div class="saved-value" id="saved-steps">0</div>
+        <div class="saved-label">Steps Not Re-Run</div>
+      </div>
+      <div class="saved-item">
+        <div class="saved-value" id="saved-time">0s</div>
+        <div class="saved-label">Time Not Re-Spent</div>
+      </div>
+      <div class="saved-item">
+        <div class="saved-value" id="saved-cost">$0.0000</div>
+        <div class="saved-label">Compute Not Re-Bought</div>
+      </div>
+      <div class="saved-item">
+        <div class="saved-value" id="saved-energy">0.000 kWh</div>
+        <div class="saved-label">Energy Not Burned</div>
+      </div>
+      <div class="saved-item">
+        <div class="saved-value" id="saved-bandwidth">0 KB</div>
+        <div class="saved-label">Telemetry Not Sent</div>
+      </div>
+    </div>
+    <div class="saved-note" id="saved-note">—</div>
+  </section>
 
   <!-- Compute-savings ledger: hidden until the first real intervention -->
   <div class="ledger-card" id="ledger-card">
@@ -772,6 +830,7 @@ function updateSavingsLedger(msg) {
   // never counted as saved.
   preservedLostSteps = lost;
   startPreservedMeter();
+  startSaved(lost);
 
   const failStep = failures.length ? failures[failures.length - 1].step : currentStep;
   const lostNote = lost
@@ -1368,6 +1427,140 @@ function stopRunMeter() {
   if (runMeterTimer !== null) { clearInterval(runMeterTimer); runMeterTimer = null; }
 }
 
+// ── Resources Conserved — the counterfactual ────────────────────────────────
+// Every other figure on this dashboard reports what the run is doing. This one
+// reports what the user did not have to spend, across the dimensions the
+// challenge names: computation, time, bandwidth, storage, repeated effort.
+//
+// The counterfactual is deliberately the conservative one. Without ARC a
+// numerical failure means the weights are destroyed and the run restarts from
+// step 0 — so what is conserved is the work that survived the rollback, priced
+// at the same labelled GPU rate as everything else here. Steps the rollback
+// threw away are never counted as saved.
+//
+// It appears only once ARC has actually rescued the run. Showing a saving for a
+// run that was never in trouble would be inventing one.
+let savedActive = false;
+let savedTimer = null;
+let savedLostSteps = 0;
+// 'preserved' after a rescue; 'burned' after a detection ARC will not act on.
+// The panel belongs on both paths: the largest waste figure this project has
+// measured (82-92% of a run spent after the verdict) is on the report-only
+// path, where nothing is rescued and the number is what the user is still
+// paying. Showing the panel only on a rescue put the headline number nowhere.
+let savedMode = 'preserved';
+let savedDetectStep = 0;
+let savedDetectTime = 0;
+
+// Bytes a coalesced telemetry stream did not send. The harness emits one metric
+// event per *sampled* step; the step numbers themselves keep counting, so the
+// gap between the highest step seen and the number of events received is the
+// number of emissions skipped. 277 bytes is the measured mean event size over
+// the 390-step run in docs/WASTE_REDUCTION.md (108,053 bytes / 390 events).
+const MEAN_METRIC_BYTES = 277;
+function bytesNotSent() {
+  if (!steps.length) return 0;
+  const highest = steps[steps.length - 1];
+  return Math.max(0, highest - steps.length) * MEAN_METRIC_BYTES;
+}
+
+// A short run at 3 dp reads "0.000 kWh", which looks like a broken tile rather
+// than a small number.
+function fmtEnergy(kwh) {
+  if (kwh >= 0.01) return kwh.toFixed(3) + ' kWh';
+  if (kwh >= 1e-5) return (kwh * 1000).toFixed(2) + ' Wh';
+  return (kwh * 3.6e6).toFixed(1) + ' J';
+}
+
+function fmtBytes(b) {
+  if (b < 1024) return `${Math.round(b)} B`;
+  if (b < 1048576) return `${(b / 1024).toFixed(1)} KB`;
+  return `${(b / 1048576).toFixed(2)} MB`;
+}
+
+function renderSaved() {
+  if (!savedActive || runStartTime === null) return;
+  const burned = savedMode === 'burned';
+  const currentStep = steps.length ? steps[steps.length - 1] : 0;
+  const survivedSteps = burned
+    ? Math.max(0, currentStep - savedDetectStep)
+    : Math.max(0, currentStep - savedLostSteps);
+  const ms = burned
+    ? Date.now() - savedDetectTime
+    : (Date.now() - runStartTime) * (currentStep > 0 ? survivedSteps / currentStep : 0);
+  const secs = ms / 1000;
+  const hours = ms / 3600000;
+
+  document.querySelector('.saved-title').textContent =
+    burned ? 'Resources Being Spent Since ARC Knew' : 'Resources Conserved';
+  document.querySelector('#saved-steps + .saved-label').textContent =
+    burned ? 'Steps Since Verdict' : 'Steps Not Re-Run';
+  document.querySelector('#saved-time + .saved-label').textContent =
+    burned ? 'Time Since Verdict' : 'Time Not Re-Spent';
+  document.querySelector('#saved-cost + .saved-label').textContent =
+    burned ? 'Compute Spent Since' : 'Compute Not Re-Bought';
+  document.querySelector('#saved-energy + .saved-label').textContent =
+    burned ? 'Energy Spent Since' : 'Energy Not Burned';
+  document.getElementById('saved-card').style.borderLeftColor =
+    burned ? 'var(--accent-orange)' : 'var(--accent-green)';
+  document.querySelector('.saved-title').style.color =
+    burned ? 'var(--accent-orange)' : 'var(--accent-green)';
+
+  document.getElementById('saved-steps').textContent = survivedSteps.toLocaleString();
+  document.getElementById('saved-time').textContent =
+    secs < 90 ? `${secs.toFixed(0)}s` : `${(secs / 60).toFixed(1)}m`;
+  document.getElementById('saved-cost').textContent = '$' + (hours * gpuRate).toFixed(4);
+  document.getElementById('saved-energy').textContent =
+    fmtEnergy(hours * (gpuWatts / 1000));
+  document.getElementById('saved-bandwidth').textContent = fmtBytes(bytesNotSent());
+
+  document.getElementById('saved-note').innerHTML = burned
+    ? `ARC reported this failure and is deliberately not acting on it — no ` +
+      `response has been shown to help. Everything above is compute spent after ` +
+      `the diagnosis was already known. <strong>Stopping now saves the rest.</strong>` +
+      `<br><span class="assumption">Priced at $${gpuRate.toFixed(2)}/hr ` +
+      `(${escapeText(gpuRateSource)}) and ${gpuWatts}W typical for this tier.</span>`
+    : `This run survived a failure that destroys the weights. Unattended, it ends ` +
+      `here and the work above is gone.` +
+    `<br><span class="assumption">The saving is against <em>this run dying</em>, ` +
+    `not against a better one: a human at the keyboard would fix the ` +
+    `hyperparameter instead, and reach a better model. What ARC buys is a run ` +
+    `that survives when nobody is watching. Priced at $${gpuRate.toFixed(2)}/hr ` +
+    `(${escapeText(gpuRateSource)}) and ${gpuWatts}W typical for this tier; ` +
+    `rolled-back steps excluded.</span>`;
+}
+
+function startSaved(lostSteps) {
+  savedMode = 'preserved';
+  savedLostSteps = lostSteps || 0;
+  savedActive = true;
+  document.getElementById('saved-card').classList.add('active');
+  renderSaved();
+  if (savedTimer === null) savedTimer = setInterval(renderSaved, 1000);
+}
+
+function startBurned(step) {
+  if (savedActive && savedMode === 'preserved') return;  // a rescue outranks this
+  savedMode = 'burned';
+  savedDetectStep = step || 0;
+  savedDetectTime = Date.now();
+  savedActive = true;
+  document.getElementById('saved-card').classList.add('active');
+  renderSaved();
+  if (savedTimer === null) savedTimer = setInterval(renderSaved, 1000);
+}
+
+function stopSaved() {
+  if (savedTimer !== null) { clearInterval(savedTimer); savedTimer = null; }
+}
+
+function resetSaved() {
+  stopSaved();
+  savedActive = false; savedLostSteps = 0; savedMode = 'preserved';
+  savedDetectStep = 0; savedDetectTime = 0;
+  document.getElementById('saved-card').classList.remove('active');
+}
+
 // ── Preserved-compute meter — live after a successful rescue ────────────────
 let preservedTimer = null;
 let preservedLostSteps = 0;
@@ -1478,6 +1671,7 @@ function handleMessage(msg) {
       stopWasteCounter();
       stopRunMeter();
       stopPreservedMeter();
+      resetSaved();
       preservedLostSteps = 0;
       document.getElementById('ledger-time-label').textContent = 'Training Preserved';
       document.getElementById('ledger-cost-label').textContent = 'Compute Not Re-Spent';
@@ -1672,6 +1866,11 @@ function handleMessage(msg) {
       }
       failures.push({ step: msg.step, kind: msg.kind || 'numerical' });
       startWasteCounter(msg.step, msg.kind || 'numerical', isReportOnly(msg.kind));
+      if (!interventionExpected(msg.kind)) {
+        // Nothing is coming to fix this, so what accrues from here is spend, not
+        // progress. Same panel, inverted framing.
+        startBurned(msg.step);
+      }
       addLogEntry('failure', 'failure',
         `[Step ${msg.step}] ${shortKind(msg.kind)} — ${msg.reason || 'failure signature detected'}`);
       window.chartsNeedUpdate = true;
@@ -1811,6 +2010,7 @@ function handleMessage(msg) {
       stopWasteCounter();
       stopRunMeter();
       stopPreservedMeter();
+      stopSaved();
       resetStopButtons();
       break;
 

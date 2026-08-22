@@ -593,6 +593,9 @@ async function launchAgent(
 
   const stepDelay: number = config.get("stepDelay") ?? 0;
   const maxCheckpointMB: number = config.get("maxCheckpointMB") ?? 512;
+  // Guarded: a value below 1 would make the modulo gate in the harness emit
+  // nothing at all, and a fractional one would never match.
+  const telemetryEvery: number = Math.max(1, Math.floor(config.get<number>("telemetryEvery") ?? 1));
   const runnerScript = path.join(context.extensionPath, "python", "runner.py");
 
   const env: NodeJS.ProcessEnv = {
@@ -601,6 +604,12 @@ async function launchAgent(
     ARC_STEP_DELAY: stepDelay.toString(),
     ARC_MODE: mode,
     ARC_MAX_CHECKPOINT_MB: maxCheckpointMB.toString(),
+    // The coalescing policy existed in the harness but had no way in: it read
+    // ARC_METRIC_EVERY, which nothing set and no setting exposed, so a default
+    // install emitted one event per step and realised none of the measured
+    // -72.2% reduction. Surfacing it is the difference between a built feature
+    // and a usable one.
+    ARC_METRIC_EVERY: telemetryEvery.toString(),
   };
 
   // ── Spawn the Python backend ───────────────────────────────────────────────
