@@ -304,7 +304,7 @@ Built ARC Lens end-to-end: VS Code extension architecture, real-time telemetry d
 ## 9. Current Traction
 
 - `arc-training` published and available on PyPI
-- ARC Lens `.vsix` packaged and installable; current build 0.3.8
+- ARC Lens `.vsix` packaged and installable; current build 0.3.9
 - Active Discord community established
 - AGPL-3.0 open-source license for maximum adoption and attribution
 - All benchmark results reproducible via public experiment scripts

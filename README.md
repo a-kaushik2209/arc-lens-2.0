@@ -266,7 +266,7 @@ npm test                       # TypeScript + dashboard suites
 python tests/test_harness.py   # harness, detector, checkpointing, end-to-end
 ```
 
-134 tests — 59 TypeScript/dashboard, 75 Python. The Python suite includes ten end-to-end tests
+136 tests — 61 TypeScript/dashboard, 75 Python. The Python suite includes ten end-to-end tests
 that run the real harness against real training loops, asserting that gradient accumulation does
 not inflate the step count, that an LR intervention survives a scheduler rewriting the learning
 rate every step, that baseline mode never intervenes, and that tracebacks point at the user's

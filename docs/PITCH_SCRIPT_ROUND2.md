@@ -170,7 +170,7 @@ amount would be the same class of problem.
 
 [Test output, then comparison table]
 
-134 tests — 75 Python, 59 TypeScript and dashboard. Ten Python tests run the real harness against
+136 tests — 75 Python, 61 TypeScript and dashboard. Ten Python tests run the real harness against
 real training loops end to end. Several were written before the code they cover and found real
 bugs doing it, including one where an optimizer was matched to a wrapper module instead of the
 submodule it updates — that would have rolled back both halves of a GAN. CI fails the build on
@@ -212,7 +212,7 @@ Where each judging parameter gets hit. If a beat gets cut for time, check what i
 |:---|:---|:---|
 | Task implementation | 3:00, 4:05, 5:15 | Compute preserved, telemetry −72%, a11y 87→100, the four required states named |
 | Task complexity | 1:45 | Optimizer-level patch, in-process rollback against a live scheduler, GAN/AMP/accumulation correctness |
-| Technical execution | 6:10 | 134 tests, ten end-to-end, TDD-found GAN bug, CI secret scan |
+| Technical execution | 6:10 | 136 tests, ten end-to-end, TDD-found GAN bug, CI secret scan |
 | Innovation & creativity | 0:50, 4:05, 6:10 | Acts instead of alerting; legibility reframed as the waste reduction |
 | Functionality & reliability | 3:00, 5:15 | +36.6 points on a seeded A/B; unrecoverable verdict instead of infinite retry |
 | Documentation & presentation | 5:15, 7:00 | On-screen provenance for every figure; every sweep published, withdrawals included |

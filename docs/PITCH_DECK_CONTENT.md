@@ -331,11 +331,11 @@ continue.* They alert, they stop, or they restart the whole job after a hardware
 
 ### Slide 12 — Validation
 
-**Headline:** 134 tests. 8 architectures. Every sweep published, including the ones that lost.
+**Headline:** 136 tests. 8 architectures. Every sweep published, including the ones that lost.
 
 *(Footer, and say it aloud: "Internal testing — not independently verified.")*
 
-- **134 tests** — 75 Python, 59 TypeScript/dashboard. Ten Python tests run the **real harness
+- **136 tests** — 75 Python, 61 TypeScript/dashboard. Ten Python tests run the **real harness
   against real training loops** end to end: gradient accumulation doesn't inflate the step count,
   an LR intervention survives a scheduler rewriting the LR every step, baseline mode never
   intervenes, tracebacks land on the user's lines.
