@@ -1,102 +1,143 @@
 # ARC Lens — Pitch Deck Content
 
-Source material: `README.md`, `ARCHITECTURE.md`, `ARC_FUNDING_PROPOSAL.md`,
-`arc_lens_business_plan.md`, `SECURITY_AUDIT.md`, `FUTURE_IMPROVEMENTS.md`. Every number
-below traces back to one of those files. Anything not independently verified is labeled as
-such — say it that way out loud too, a judge who catches an oversold claim will not un-hear it.
+**FAR AWAY 2026, Round 2 · Challenge #171: Accessibility — Resource Waste Reduction**
+**Team Heisen-bug (U333WKR8)**
+
+Source material: `README.md`, `ARCHITECTURE.md`, `WASTE_REDUCTION.md`, `SWEEP_LOG.md`,
+`EXPERIMENT_RESULTS.md`, `ARC_FUNDING_PROPOSAL.md`, `arc_lens_business_plan.md`,
+`SECURITY_AUDIT.md`, `FUTURE_IMPROVEMENTS.md`. Every number below traces back to one of those
+files. Anything not independently verified is labeled as such — **say it that way out loud too.
+A judge who catches an oversold claim will not un-hear it, and this deck's strongest asset is
+that its unfavourable numbers are volunteered.**
+
+Spoken script: [`PITCH_SCRIPT_ROUND2.md`](PITCH_SCRIPT_ROUND2.md). Demo runbook:
+[`DEMO_SCRIPT.md`](DEMO_SCRIPT.md).
 
 ---
 
 ## Elevator Pitch (one sentence)
 
 > ARC Lens is a VS Code extension that watches your PyTorch training run in real time and, the
-> moment the loss goes non-finite or explodes, automatically rolls the model back to its last
-> healthy checkpoint and lowers the learning rate, so the run keeps going without you ever
-> touching a restart button — and for the failures it can detect but not safely fix, like a
-> silent representation collapse, it says so instead of guessing.
+> moment the loss goes non-finite, rolls the model back to its last healthy checkpoint and cuts
+> the learning rate — on a seeded A/B that took a run from 10.00% accuracy, which is chance, to
+> 46.59% — and for the failures it can detect but *not* safely fix, it tells you at second 15
+> instead of second 86 rather than guessing at a response.
 
 ---
 
 ## The Problem (2–3 sentences)
 
-Neural network training fails constantly and expensively: a single NaN gradient at hour 47 of
-a 48-hour run on a $3/hr A100 is not an inconvenience, it's a complete loss of the compute,
-time, and momentum already spent, and industry-wide estimates put wasted GPU compute from
-these failures in the hundreds of millions of dollars annually. Today's tooling only watches —
-TensorBoard and Weights & Biases show you the crash after it happens, and gradient clipping
-only guards against one failure mode — so ML engineers end up as full-time babysitters,
-manually restarting and re-diagnosing the same class of failure over and over across every
-project.
+Training runs fail without crashing, and then keep burning GPU after they are already dead: on
+our own demo run ARC knew the run had failed at 15.3 seconds, and the run continued to 86
+seconds because nothing stopped it — **82% of the compute spent after the answer was known**, a
+fraction that scales with run length until it is a day and a half of a 48-hour job. Today's
+tooling only watches — TensorBoard and W&B show you the crash after it happens, and gradient
+clipping guards one failure mode — so ML engineers end up as full-time babysitters, manually
+restarting and re-diagnosing the same class of failure across every project.
 
 ---
 
 ## Slide-by-Slide Outline
 
+Fourteen slides of content. If you have ten, cut 8, 12, 13 and merge 3 into 2 — the cut list is
+at the bottom.
+
+---
+
 ### Slide 1 — Title
 
 **ARC Lens**
-*Training runs that recover themselves.*
+*Training runs that recover themselves — and say so when they can't.*
 
 A real-time PyTorch monitor and autonomous recovery system, built into VS Code.
 
-*(subtext line, optional)* Powered by `arc-training` (PyPI)
+*(subtext)* Powered by `arc-training` (PyPI) · Challenge #171
 
 ---
 
 ### Slide 2 — Problem
 
-**Headline:** Training fails. Nobody catches it in time.
+**Headline:** Training fails silently, and keeps billing you.
 
-- A NaN gradient at hour 47 of a 48-hour run doesn't just slow you down — it erases the run.
-- A single failed long training run can cost **$150–$5,000** in wasted cloud compute.
-- The average ML engineer juggles **5–15 concurrent training runs**, watching dashboards for
-  failures that show up hours apart.
-- The MLOps market is valued at **$1.4B (2023)**, projected to reach **$13B by 2030** — but
-  today's tools only tell you something went wrong. None of them fix it.
+- A NaN gradient at hour 47 of a 48-hour run doesn't slow you down — it erases the run.
+- Worse is the failure that never crashes: **our demo run sat at 10.00% accuracy — random
+  guessing on 10 classes — for four full epochs**, loss pinned at ln(10), while every chart
+  looked flat-but-plausible. No NaN, no gradient spike, no rank collapse.
+- **ARC knew at 15.3 s. The run continued to 86 s. 82% of its compute was spent after the
+  answer was already known** — because nothing stopped it.
+- A single failed long training run costs **$150–$5,000** in wasted cloud compute. The MLOps
+  market is **$1.4B (2023) → $13B (2030)**, and today's tools tell you something went wrong.
+  None of them act.
 
-**One-liner for the slide footer:** *"We didn't build another dashboard. We built the fix."*
+*(Footer)* *"We didn't build another dashboard. We built the part that acts — and the part that
+admits when it shouldn't."*
 
----
-
-### Slide 3 — Solution
-
-**Headline:** ARC Lens watches, detects, and recovers — automatically.
-
-- Hooks into any PyTorch training loop with zero/minimal code changes.
-- Streams live telemetry to a VS Code dashboard: loss, learning rate, gradient norm, GPU
-  memory, plus deeper signals — effective rank, gradient entropy, weight update ratio,
-  gradient flow ratio. **None of the four is wired to an intervention any more.** Two used to
-  trigger and were deleted after measurement showed them firing on healthy runs; the remaining
-  two — the loss plateau and effective rank — detect and report but no longer act, after
-  measurement showed failing runs ending worse with their responses applied.
-- The moment a run's loss goes non-finite or past 1e6, a local recovery agent **rolls back to
-  the last healthy checkpoint and reduces the learning rate** — no restart, no manual
-  intervention. That is the one entry point, and saying so is the honest version: a structural
-  signal can raise a report, but only the loss can trigger an action.
-- Training resumes automatically, in the same process, in under a second.
+**Provenance note for the presenter:** the 82% and the 10.00% are ours, measured, reproducible
+(`WASTE_REDUCTION.md` §3a). The dollar and market figures are third-party estimates. Don't blur
+them together.
 
 ---
 
-### Slide 4 — How It Works
+### Slide 3 — The brief, and our answer to it
 
-**Headline:** Three tiers, one loop.
+**Headline:** Accessibility and resource waste are the same work here.
 
-1. **VS Code Extension** — the dashboard, the "Run with ARC Lens" button, the chat and script
-   generator (Pro).
-2. **Telemetry Engine** — hooks `Optimizer.step`, so it measures once per *weight update*.
-   Computes gradient norm / learning rate / GPU memory, plus the structural signals from
-   `arc-training` (PyPI), and streams it all out as JSON.
-3. **Local Recovery Agent** — a rule-based loop. When the loss goes non-finite or past 1e6 it
-   restores the last healthy checkpoint, scales down the learning rate, and turns on gradient
-   clipping, live, on the running process — and if three attempts don't work it says the run is
-   unrecoverable instead of retrying forever. The structural signals feed reports, not actions;
-   that is a measured decision, not an omission.
+Challenge #171 asks us to improve the part of the MVP most related to **accessibility** so that
+it reduces **waste**, and to clearly show **success, failure, current status and next steps**.
+Those read like two deliverables. In this product they are one, and the reason is a limitation,
+not a boast:
 
-**Suggested diagram (simple, drawable by hand or in slides):**
+> **ARC detects a silent death reliably. It cannot fix one.**
+> Four structural detection rules were built. Two were deleted for firing on healthy runs. The
+> two that remain are report-only, because every response we tried made a recoverable run worse.
+
+So for that failure, the product's output is not a rescue — it is **a person told, in time, in
+terms they can act on.** Which makes the status strip, the ARIA live region, the preflight's
+named cause, and the data-table equivalent behind every chart not decoration around the feature.
+**For that failure they are the entire feature**, and the 82% gap they close is the waste.
+
+---
+
+### Slide 4 — Solution
+
+**Headline:** ARC Lens watches, detects, recovers — and reports when recovery isn't safe.
+
+- Hooks any PyTorch training loop with **zero code changes**. No import, no callback, no
+  decorator.
+- Streams live telemetry to a VS Code dashboard: loss, learning rate, gradient norm, GPU memory,
+  plus structural signals — effective rank, gradient entropy, weight update ratio, gradient flow
+  ratio.
+- **The moment the loss goes non-finite or past 1e6**, a local recovery agent rolls back to the
+  last healthy checkpoint, cuts the learning rate, and latches gradient clipping on. Training
+  resumes in the same process, no restart.
+- **That is the one entry point, and saying so is the honest version.** A structural signal can
+  raise a report; only the loss can trigger an action. Two structural rules were deleted after
+  measurement showed them firing on healthy runs; the remaining two detect and report but no
+  longer act.
+- After three failed recoveries of the same kind it declares the run **unrecoverable** and says
+  so, instead of rolling back forever.
+
+---
+
+### Slide 5 — How It Works
+
+**Headline:** Three tiers, one measurement anchor.
+
+1. **VS Code Extension** — dashboard, the "Run with ARC Lens" button, chat and script generator
+   (Pro).
+2. **Instrumentation Harness** — monkey-patches PyTorch at **`Optimizer.step`, not
+   `loss.backward()`**. One recorded step is one *weight update*, which is what makes gradient
+   accumulation, mixed precision and multi-optimizer GANs correct rather than merely
+   non-crashing. Hook `backward()` instead and all three are wrong.
+3. **Recovery Agent** — a deterministic rule engine. Restores weights into the live model
+   mid-run and continues against them, *while an LR scheduler rewrites the learning rate every
+   step and tries to undo the correction.* That case is tested.
+
+Your script runs unmodified through `runpy`, so tracebacks report **your** line numbers.
 
 ```
  [Your PyTorch script]          ← unmodified; no import, no callback
-        │  (optimizer.step() intercepted = one weight update)
+        │  (Optimizer.step intercepted = one weight update)
         ▼
  [Telemetry Engine]───────────► streams metrics ───────►[VS Code Dashboard]
         │
@@ -105,191 +146,271 @@ A real-time PyTorch monitor and autonomous recovery system, built into VS Code.
  [Recovery Agent] ──rolls back weights, cuts LR, clips grads──► [training resumes]
 ```
 
-Draw it as a loop, not a line: telemetry flows up to the dashboard continuously; the recovery
-agent sits beside the training loop and only acts when a threshold trips, then hands control
-straight back.
+Draw it as a loop, not a line.
 
 ---
 
-### Slide 5 — Live Demo
+### Slide 6 — Live Demo
 
-**Headline:** Watch it happen.
+**Headline:** Watch it happen. Nothing is injected.
 
-What to show, in order:
-1. Open a Python training script in VS Code, click **▶ Run with ARC Lens**. No config, no
-   code changes.
-2. Dashboard opens — point out the four live chart panels (Vitals, Dynamics, Structural,
-   Flow) updating in real time.
-3. Let the run hit a failure. **Nothing is injected** — the demo runs a real CIFAR-10 CNN at a
-   deliberately aggressive learning rate, so whether it fails and at which step depends on the
-   data order and the initialisation. Seeded runs are reproducible, so do the dry run in
-   `DEMO_SCRIPT.md` §1.4 and know your number before you are on stage.
-4. Narrate the trace as it appears: failure detected → response chosen → applied, all inside the
-   same run, no restart.
-5. Be precise about which failure you got. A `numerical` failure gets a rollback and the loss
-   curve resumes. A `loss_plateau` ("stalled") gets **no action at all** — it is report-only,
-   and that is a deliberate result, not a gap. It used to cut the learning rate; in the A/B the
-   arm that did so finished at 10.00% against a control that recovered to 73.19% — and a later
-   sweep split that same configuration by 62 points with *nothing* intervening, so we do not
-   claim the cut caused it. The honest line is "we detected a death that every loss-curve tool
-   would have shown as a flat green line, and we have no evidence any response we can make
-   helps, so we report it instead of guessing" — not "we saved it".
+1. Open a training script, click **▶ Run with ARC Lens**. No config, no code changes.
+2. Dashboard opens — four live chart panels, plus the **Resources Conserved** panel counting
+   from step one.
+3. **Default `train_demo.py` is now `ARC_DEMO_LR=5.0`, warmup 5, and a default run produces both
+   failure kinds.** The loss goes non-finite around step 6 — ARC rolls back, cuts the LR, latches
+   clipping, and the run climbs off chance accuracy. Later, a `loss_plateau` fires and ARC
+   deliberately does **not** act.
+4. **Show both. The second is the more convincing half.** The honest line is: *"we detected a
+   death that every loss-curve tool would have shown as a flat green line, and we have no
+   evidence any response we can make helps, so we report it instead of guessing."*
 
-**Presenter note:** the recovery trace is a deterministic rule engine, not a live LLM call —
-it's fast and 100% reproducible on stage, which is a feature for a demo, not a limitation to
-hide. Say so if asked.
+**Do not demo at `ARC_DEMO_LR=0.5`** (the old default). It only produces `loss_plateau`, so the
+rescue path is never exercised and nobody sees a recovery.
+
+**Presenter notes:** the recovery trace is a deterministic rule engine, not a live LLM call —
+fast and 100% reproducible on stage. That's a feature for a demo, not a limitation to hide.
+Do the dry run in `DEMO_SCRIPT.md` §1.4 and know your step number before you're on stage.
 
 ---
 
-### Slide 6 — Differentiation
+### Slide 7 — Proof: compute actually preserved
 
-**Headline:** Everyone else shows you the crash. We fix it.
+**Headline:** Same seed. Same data order. One difference.
 
-| Capability | TensorBoard | Weights & Biases / Neptune | ARC Lens |
-| :--- | :---: | :---: | :---: |
-| Real-time telemetry | Yes | Yes | Yes |
-| Advanced failure signals charted (effective rank, gradient entropy) | No | No | Yes |
-| Detects failure | After the fact | After the fact | In real time |
-| **Automatic rollback & recovery** | **No** | **No** | **Yes** |
-| Requires code changes | Minimal | Minimal | Zero/minimal |
+`train_demo.py` defaults, 1,950 steps, the only variable is whether interventions are allowed.
+The loss goes non-finite at step 6 in **both** arms.
 
-**The point to hammer:** TensorBoard, W&B, and Neptune are observability tools — they log and
-visualize what already happened. None of them take action. ARC Lens is the only one of these
-that closes the loop: it doesn't just tell you the run died, it stops the run from dying in
-the first place.
+| | `baseline` (control) | `active` |
+|:---|---:|---:|
+| Interventions applied | **0** | **2** — rollback + LR cut, grad clipping |
+| Epoch 1 train loss | 2.52e+12 | 4.22e+05 |
+| Epoch 3 val accuracy | 10.00% | **18.28%** |
+| Epoch 5 val accuracy | **10.00%** — chance | **46.59%** |
+| Wall clock | 85.27 s | 113.49 s |
 
----
+**+36.59 points against an identically seeded control**, and still rising when the schedule ends.
 
-### Slide 7 — Traction / Validation
-
-**Headline:** Tested across 8 architectures, 10M–117M parameters.
-
-*(Label this slide clearly: "Internal testing — not yet independently verified" in the
-footer, and say the words out loud when presenting it.)*
-
-- **100% recovery rate**, zero false positives, across 4 protection methods × 5 failure types
-  × 5 random seeds (claimed in internal testing).
-- **Runtime overhead measured on GPU: 1.8% core, 8.4% with full structural diagnostics.**
-  RTX 3050, 2.79M-parameter CNN, 200 steps × batch 128, median of 3, same loop run with and
-  without the harness. Reproducible with `python python/benchmark_overhead.py`; raw numbers in
-  `docs/benchmark_overhead.json`. This supersedes the earlier CPU-only "<10%" claim — the
-  number now has a method behind it, and sampling the expensive signals every step instead of
-  every 25 costs 170%, which is why they are sampled.
-- **Baseline-vs-active A/B on real CIFAR-10**, identical seeds, interventions the only
-  difference — including the configurations where ARC detects the failure and cannot save the
-  run. Results in `docs/EXPERIMENT_RESULTS.md`.
-- Validated against 9 real architectures from 10M to 117M parameters (NanoGPT, ResNet-50,
-  YOLOv11, GPT-2 Small/Medium, Stable Diffusion U-Net, Llama-style, ViT-Base), each recovering
-  from an injected failure (LR spikes, NaN bombs, gradient explosions).
-- `arc-training` is published and live on PyPI (`5.0.0`); ARC Lens (`0.3.8`) is packaged and
-  submission-ready.
+**Say the caveats out loud, before a judge finds them:**
+- The active arm is **33% slower**. Recovering costs more than letting a dead run coast. ARC
+  didn't make this run cheaper — it turned 85 wasted seconds into 113 productive ones. The
+  alternative was never "a faster good run", it was "restart and hope".
+- **This is a single seeded pair.** `SWEEP_LOG.md` sweep 6 is exactly why that matters. No
+  distribution over repeated runs has been measured and **no error bar is claimed.**
+- 46.59% is not a good CIFAR-10 result. It's a **rescued** run, not a tuned one.
 
 ---
 
-### Slide 8 — Business Model
+### Slide 8 — Waste reduction, measured in four dimensions
+
+**Headline:** No claim without a control arm.
+
+| Dimension | Result | Confidence |
+|:---|:---|:---|
+| **Computation** (Stop) | ~90% of a failing run burns after the verdict | High — two runs, consistent |
+| **Computation** (intervention) | 7 failure events → 1, at 1.8% overhead | High — A/B, same config |
+| **Bandwidth / storage** | **−72.2%** telemetry bytes, **zero** wall-clock cost | High — direct byte count |
+| **Storage** | Checkpoint byte budget correctly overrides the count cap | High — direct observation |
+| **Accessibility** | Lighthouse **87 → 100** | High — automated, reproducible |
+| **Time** (preflight) | **No meaningful saving.** Null result. | High — and published as one |
+
+**Two results came back against us and are on the slide anyway:** the preflight saves *effort*
+(a named cause and a named fix instead of a traceback), not seconds. And the telemetry saving is
+**off by default** — `arcAgent.telemetryEvery` is 1; −72.2% is what it buys at 10. Risk detection
+is unaffected either way, because loss history and risk are computed every step regardless.
+
+**Overhead of the whole system: 1.8% core, 8.4% with full structural diagnostics.** GPU-measured,
+same loop with and without the harness, median of 3. Sampling the expensive signals every step
+instead of every 25 costs 170% — which is why they're sampled.
+
+---
+
+### Slide 9 — Accessibility, and the honesty audit
+
+**Headline:** 87 → 100. Then we audited whether the numbers were real.
+
+**Lighthouse 87 → 100** (13.4.1, desktop, `navigation`): ARIA live regions that escalate to
+assertive only on failure, a data-table equivalent behind every canvas chart, `focus-visible`,
+`prefers-reduced-motion`, and contrast fixes. Passing audits went 34 → 42.
+
+**Not claimed:** a manual NVDA/Orca pass. Lighthouse confirms the live region *exists*, not that
+what it announces is useful in sequence. That gap is documented.
+
+**Then we audited every figure the dashboard displays** and labelled each one *measured*,
+*derived* or *estimated* — on screen, in the page itself. **The audit found four fabrications**,
+all of the same pattern:
+
+- an absent `lr` rendered `0.00e0`; an absent `gpu_mem_mb` rendered `0.0 MB`
+- **an absent risk score rendered `0.00` — which reads as *safe*.** On a gauge whose entire job
+  is saying when a run is *not* safe, that's fabricating in the one direction that matters.
+- the telemetry tile displayed a number with no stated basis and could over-report without bound
+
+All fixed. The tests now check a field's **presence**, not its truthiness — because zero is a
+legitimate value for `lr` (cosine schedules end there) and for GPU memory (CPU runs report 0).
+
+*The precedent: `SECURITY_AUDIT.md` C-2, where four charts were found rendering `Math.random()`
+styled identically to measurements. The standard since: a number that looks like a measurement
+must be one, and an absent value must read as absent.*
+
+---
+
+### Slide 10 — The four states
+
+**Headline:** Success, failure, status, next steps — all on screen.
+
+| State | Where it lives |
+|:---|:---|
+| **Current status** | Status strip: running, at what step, at what risk |
+| **Success** | The resume — failure detected, response applied, marked on the chart at the exact step (`markLine`/`markArea`) |
+| **Failure** | After three failed recoveries of a kind: **"unrecoverable"**, stated plainly. The useful answer then is "kill it", not a fourth rollback |
+| **Next steps** | The Stop button, and an exportable self-contained HTML incident report |
+
+That Stop button is the 82% figure converted into an actual saving. Detection is worth nothing
+if nothing acts on it.
+
+---
+
+### Slide 11 — Differentiation
+
+**Headline:** Everyone else shows you the crash.
+
+| Capability | TensorBoard | W&B / Neptune | Lightning | Composer | ARC Lens |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| Real-time telemetry | Yes | Yes | via logger | via logger | Yes |
+| Structural failure signals charted | No | No | No | No | **Yes** |
+| Detects failure | After the fact | Alerts a human | `check_finite` | — | In real time |
+| Response | None | Notify | **Stops the run** | Restart whole job | **Corrects in-process** |
+| IDE-native | Partial | No | No | No | **Yes** |
+| Code changes | Minimal | Minimal | Trainer rewrite | Trainer rewrite | **Zero** |
+
+**The defensible claim, stated narrowly:** *no dashboard-based competitor surveyed converts a
+detected training failure into an automatic, in-process correction that lets the same run
+continue.* They alert, they stop, or they restart the whole job after a hardware fault.
+
+**Two things to say before a well-read judge says them for you:**
+1. **Rollback + LR cut is not a new technique.** It's documented practice in the OPT-175B and
+   BLOOM logbooks — done by hand, by an engineer watching a dashboard. Our contribution is
+   automating a known manual practice for people without a frontier lab's monitoring team. Real
+   contribution; not a new algorithm.
+2. **The shipped detector is deterministic thresholds, not ML.** A learned classifier exists in
+   the core research library; it is **not** wired into the live path, so we don't claim it.
+
+---
+
+### Slide 12 — Validation
+
+**Headline:** 134 tests. 8 architectures. Every sweep published, including the ones that lost.
+
+*(Footer, and say it aloud: "Internal testing — not independently verified.")*
+
+- **134 tests** — 75 Python, 59 TypeScript/dashboard. Ten Python tests run the **real harness
+  against real training loops** end to end: gradient accumulation doesn't inflate the step count,
+  an LR intervention survives a scheduler rewriting the LR every step, baseline mode never
+  intervenes, tracebacks land on the user's lines.
+- Several tests were **written before the code they cover and found real bugs doing it** —
+  including an optimizer matched to a wrapper module instead of the submodule it updates, which
+  would have rolled back both halves of a GAN.
+- **8 architectures, 10M–117M parameters** (NanoGPT, ResNet-50, YOLOv11, GPT-2 Small/Medium,
+  Stable Diffusion U-Net, Llama-style, ViT-Base) — **8 of 8 recovered**. Read that as what it is:
+  **programmatically injected** failures, measured **by us**, on CPU. "100% on injected failures"
+  is a different claim from "100% on real runs at scale", and we make only the first.
+- **CI fails the build on any secret-shaped literal** in source.
+- `arc-training` is live on PyPI; ARC Lens `0.3.9` is packaged and submission-ready.
+
+**Do not put "zero false positives" on this slide.** Two of our own detection rules were deleted
+*for* false positives on healthy runs. The stronger story is that we caught them.
+
+---
+
+### Slide 13 — Business Model
 
 **Headline:** Free for every developer. Paid for the AI layer.
 
-**Free tier — $0/month:**
-- Live telemetry dashboard (loss, learning rate, gradient norms, effective rank, and more)
-- Automatic rollback & recovery — the core self-healing engine, free for everyone
-- Chart export (PNG)
+**Free — $0:** live telemetry dashboard, automatic rollback & recovery (the whole self-healing
+engine), chart export.
 
-**Pro tier — $2.99/month:**
-- AI Failure Analyst — a chat that explains *why* a run failed, using live telemetry context
-- ARC Script Generator — generates ARC-instrumented PyTorch training scripts from a form
-- Deep telemetry trend explanations
+**Pro — $2.99/mo:** AI Failure Analyst (chat that explains *why* a run failed, with live
+telemetry as context), ARC Script Generator, deep telemetry trend explanations.
 
-**Why the economics work:** Pro uses a **Bring Your Own Key (BYOK)** model — users supply
-their own LLM API key (OpenRouter, Groq, Anthropic, OpenAI, or Gemini, auto-detected from the
-key), so ARC never pays for token usage. That's roughly **85% net margin** on every
-subscription, with zero token-cost liability as usage scales.
+**Why it scales:** Pro is **bring-your-own-key** — the user supplies their LLM API key
+(OpenRouter, Groq, Anthropic, OpenAI, Gemini; provider inferred from the prefix). ARC never pays
+for tokens and never holds a credential. Roughly **85% net margin**, with **zero token-cost
+liability as usage grows.**
 
 ---
 
-### Slide 9 — Roadmap
+### Slide 14 — Roadmap
 
 **Headline:** What ships next — turning the claim into proof.
 
-*Two items previously on this slide have shipped and moved to the demo: the compute-savings
-ledger is now the live **Resources Conserved** panel, and intervention markers are annotated on
-the loss, gradient-norm and effective-rank charts (`markLine` / `markArea`). Do not present
-shipped work as roadmap — a judge who has seen the demo will catch it.*
+*Two items previously here have shipped and moved into the demo: the compute-savings ledger is
+now the live **Resources Conserved** panel, and intervention markers are annotated on three
+charts. **Don't present shipped work as roadmap** — a judge who has seen the demo will catch it.*
 
-- **Error bars on the rescue claim.** The +36.6-point result (10.00% → 46.59%) is a single
-  seeded pair. `python/repeatability.py --repeats N` turns it into a distribution. Sweep 6 is
-  exactly why this matters: at lr=0.5 the run-to-run spread swamped effects of this size. Until
-  this runs, the claim is stated with its caveat attached.
-- **Side-by-side A/B in the UI.** `Run Baseline (interventions off)` already produces the control
-  arm, but the two runs are compared by reading two dashboards. Overlaying both curves in one
-  chart turns the strongest evidence we have into something a skeptic watches happen live.
+- **Error bars on the rescue claim.** +36.59 points is one seeded pair.
+  `python/repeatability.py --repeats N` turns it into a distribution. Sweep 6 is why this
+  matters: at lr=0.5, run-to-run spread swamped effects of this size.
+- **Side-by-side A/B in the UI.** The control arm already exists as a command; overlaying both
+  curves in one chart turns our strongest evidence into something a skeptic watches live.
 - **Distributed training (DDP/FSDP).** Rank-aware emission, `all_reduce` for global gradient
-  norms, and a barrier so every rank rolls back to the same checkpoint. Untested — it needs
-  multi-GPU hardware we don't have. This is where the expensive failures actually live, so it
-  doubles as the honest answer to "does this scale?"
-- **Manual screen-reader pass (NVDA / Orca).** Lighthouse is at 100, but automated checks confirm
-  the ARIA live region *exists*, not that what it announces is useful in sequence.
+  norms, a barrier so every rank rolls back to the same checkpoint. **Untested** — needs
+  multi-GPU hardware we don't have. This is where the expensive failures live, so it doubles as
+  the honest answer to "does this scale?"
+- **Manual screen-reader pass (NVDA / Orca).**
 
 ---
 
-### Slide 10 — Team / Ask
+### Slide 15 — Team / Ask
 
-**Team:**
-*[Add team member names, roles, and a one-line bio each here.]*
+**Team:** *[names, roles, one-line bio each]*
 
-**The Ask:**
-*[State clearly what you want from the audience — judging consideration, feedback, pilot
-users, a specific prize track, mentorship, etc.]*
+**The Ask:** *[judging consideration, pilot users, a specific prize track, mentorship]*
+
+---
+
+## If you only have 10 slides
+
+Cut **8** (fold the −72.2% into slide 3), **12**, **13**, and merge **3** into **2**.
+Never cut **7** or **9** — 7 is the only slide that proves the product works, and 9 is the only
+one that proves the numbers are real.
 
 ---
 
 ## Talking Points
 
-### The 3 most compelling, most defensible things to emphasize
+### The three most defensible things
 
-1. **It's the only one that acts, not just watches.** TensorBoard, W&B, and Neptune are all
-   observability — they log and chart what already happened. ARC Lens is architecturally
-   different: it intercepts the training loop and takes a corrective action (checkpoint
-   restore + learning-rate cut) without a human in the loop. This is a real, load-bearing
-   design difference documented in the architecture, not a marketing spin on the same feature
-   set — lean on it hard.
+1. **It acts, and we can show the delta.** TensorBoard, W&B and Neptune are observability. ARC
+   Lens intercepts the training loop and takes a corrective action without a human. On a seeded
+   A/B that's 10.00% → 46.59%. Load-bearing architectural difference, not marketing spin.
 
-2. **It watches for failures that produce no NaN and no gradient spike.** Representation
-   collapse — the model quietly losing dimensionality — doesn't show up in a loss curve at all,
-   and ARC acts on effective rank falling below half the run's own baseline. Claim this as a
-   capability that is *built and wired*, not as one that is proven: the rule is deliberately
-   conservative and has **never fired** in our validation runs (a healthy run bottoms at 97% of
-   baseline, a damaged one at 83%, against a 50% trigger). We had a second silent-failure rule on
-   gradient entropy and deleted it — it fired at step 125 on a healthy CIFAR-10 run and drove it
-   from 87.43% to chance accuracy, and the signal turns out to converge to the same value on
-   healthy and dead runs alike. The verified, demonstrable capability is numerical-divergence
-   detection and recovery, which the A/B measures directly. Overstating the silent-failure story
-   is the single easiest way to lose a technical judge, because the evidence points the other
-   way.
+2. **It knows what it can't fix, and that's measured, not modest.** Four structural rules built;
+   two deleted for firing on healthy runs (one drove a run from 87.43% to chance), two demoted to
+   report-only after their responses were measured harming recoverable runs. Claim the
+   silent-failure story as **detection**, never as rescue — the evidence points the other way, and
+   overstating it is the single easiest way to lose a technical judge.
 
-3. **Zero code changes to integrate.** The instrumentation anchors on `Optimizer.step`, so a
-   user's existing training script needs no rewrite to get monitored and protected. This is a
-   real adoption-cost advantage over tools that require wiring logging calls throughout a
-   training loop, and it's demonstrable live in under a minute.
+3. **Zero code changes.** The `Optimizer.step` anchor means an existing script needs no rewrite.
+   Demonstrable live in under a minute, and a real adoption-cost advantage over tools that need
+   logging calls wired through the loop.
 
-   The anchor choice is worth one sentence if a technical judge asks: hooking the optimizer
-   rather than `backward()` means one recorded step is one *weight update*, which is what makes
-   gradient accumulation, mixed precision and multi-optimizer setups correct rather than merely
-   non-crashing.
+### The honest caveat to have ready
 
-### One honest caveat to have ready
+**Distributed training.** GANs, gradient accumulation and AMP are handled and tested — verified
+on GPU, a 4×-accumulation AMP loop reports 20 backward calls, 5 optimizer steps, 5 metrics, with
+correctly unscaled values. DDP/FSDP is not. Say it plainly:
 
-The caveat has moved. GANs, gradient accumulation and AMP are **now handled and tested** —
-`self` at the optimizer anchor is definitionally the right optimizer, the model is matched by
-parameter identity rather than by grabbing the first `nn.Module` on the stack, and
-`GradScaler.scale` hands over the unscaled loss directly. Verified on GPU: a 4×-accumulation
-AMP loop reports 20 backward calls, 5 optimizer steps and 5 metrics, with correctly unscaled
-values.
+> *"Single-process, single-GPU today. Multi-optimizer within that process is fine and tested.
+> Distributed is the next major piece and I'm not going to claim it works when I haven't run it."*
 
-What is **genuinely still open is distributed training.** DDP/FSDP needs rank-aware emission,
-`all_reduce` for global gradient norms, and a barrier so every rank rolls back to the same
-checkpoint. None of that has been tested, because it needs multi-GPU hardware we don't have.
-Say that plainly: *"single-process, single-GPU today — multi-optimizer within that process is
-fine and tested; distributed is the next major piece and I'm not going to claim it works when
-I haven't run it."* That answer is stronger than a hedge, and it is where the expensive
-failures actually live, so it doubles as the roadmap.
+That answer is stronger than a hedge, and it doubles as the roadmap.
+
+### If a judge asks "why should I trust any of these numbers?"
+
+Point at slide 9. We audited our own dashboard and found four places it displayed a number it
+didn't have — including a missing risk score rendering as `0.00`, which reads as safe. We fixed
+them and wrote the regression tests. Then point at `SWEEP_LOG.md`: every sweep, including the two
+killed mid-run and the causal claims we withdrew after they failed to replicate.
+
+> *"Anything that intervenes in someone's training run has to earn it with evidence. Half the
+> time ours said no, and that's in the repo too."*
