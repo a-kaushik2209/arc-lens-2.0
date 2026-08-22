@@ -214,7 +214,7 @@ header {
   border-color: color-mix(in srgb, var(--accent-signature) 35%, var(--panel-border));
 }
 .stepper-label {
-  font-size: 11.5px; font-weight: 600; color: var(--text-tertiary); letter-spacing: 0.01em;
+  font-size: 11.5px; font-weight: 600; color: var(--text-secondary); letter-spacing: 0.01em;
   transition: color 0.35s ease; white-space: nowrap;
 }
 .stepper-line {
@@ -254,7 +254,7 @@ header {
 .risk-hero-text { display: flex; flex-direction: column; gap: 2px; }
 .risk-hero-label { font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); }
 .risk-hero-value { font-size: 22px; font-weight: 700; font-family: 'Space Grotesk', 'Inter', sans-serif; letter-spacing: -0.01em; transition: color 0.3s ease; }
-.risk-hero-score { font-size: 11px; color: var(--text-tertiary); font-family: 'JetBrains Mono', monospace; }
+.risk-hero-score { font-size: 11px; color: var(--text-secondary); font-family: 'JetBrains Mono', monospace; }
 
 /* ── Failure flash / recovery sweep ── */
 @keyframes flashRed {
@@ -473,7 +473,7 @@ header {
   </div>
 </header>
 
-<div class="dashboard-container">
+<main class="dashboard-container">
 
   <div class="banner" id="unrecoverable-banner">
     <div class="banner-title">RUN JUDGED UNRECOVERABLE</div>
@@ -636,7 +636,7 @@ header {
     </div>
   </div>
 
-</div>
+</main>
 
 <script nonce="{{NONCE}}">
 const vscode = typeof acquireVsCodeApi === 'function' ? acquireVsCodeApi() : null;
