@@ -671,6 +671,20 @@ pinned LOW throughout. Deliberately not fixed yet: picking a stall threshold tha
 false-positive during normal warmup (loss often looks flat before it starts moving) is a real
 design call, not a one-line addition.
 
+**Adaptive telemetry ships switched off.** `ARC_METRIC_EVERY` defaults to `1` and is not
+exposed as a VS Code setting, so a default install emits one event per step and realises
+none of the reduction the mechanism is capable of. Measured in
+[`WASTE_REDUCTION.md`](WASTE_REDUCTION.md): coalescing to every 10 steps cut stdout from
+108,053 to 30,019 bytes over a fixed 390 steps (−72.2%) with wall clock flat across arms,
+so the saving is real and free. It is off by default because raising the interval also
+thins the dashboard's chart resolution, and choosing that trade-off on the user's behalf
+is a product decision rather than a code change — but the current state is the worst of
+both, since nobody can opt in without setting an environment variable the extension never
+surfaces. Wiring it to a setting alongside `arcAgent.maxCheckpointMB` is small; picking the
+default is the actual open question. Note also that the densify-under-risk path
+(`ARC_METRIC_EVERY_DENSE`) was never exercised in those runs — risk stayed `LOW`
+throughout — so its behaviour under sustained elevated risk is untested.
+
 ---
 
 ## If there is time for exactly three things

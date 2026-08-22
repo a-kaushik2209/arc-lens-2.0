@@ -208,6 +208,9 @@ CI additionally fails the build on any secret-shaped literal in source.
 * [`docs/FUTURE_IMPROVEMENTS.md`](docs/FUTURE_IMPROVEMENTS.md) — roadmap, and what is
   deliberately still open
 * [`docs/EXPERIMENT_RESULTS.md`](docs/EXPERIMENT_RESULTS.md) — measured A/B results
+* [`docs/WASTE_REDUCTION.md`](docs/WASTE_REDUCTION.md) — measured waste-reduction
+  numbers (telemetry bytes, post-verdict compute, accessibility score), both arms,
+  including the two results that came back negative
 
 ## License
 
