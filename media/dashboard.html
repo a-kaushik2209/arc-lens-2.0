@@ -548,11 +548,11 @@ header {
     <div class="ledger-stats">
       <div>
         <div class="ledger-stat-value" id="ledger-time">0m</div>
-        <div class="ledger-stat-label">Training Preserved</div>
+        <div class="ledger-stat-label" id="ledger-time-label">Training Preserved</div>
       </div>
       <div>
         <div class="ledger-stat-value" id="ledger-cost">$0.00</div>
-        <div class="ledger-stat-label">Compute Not Re-Spent</div>
+        <div class="ledger-stat-label" id="ledger-cost-label">Compute Not Re-Spent</div>
       </div>
     </div>
     <div class="ledger-detail" id="ledger-detail">—</div>
@@ -783,6 +783,12 @@ function updateSavingsLedger(msg) {
     `<br><span class="assumption">Training preserved by the recovery, priced at ` +
     `$${gpuRate.toFixed(2)}/hr (${escapeText(gpuRateSource)}).${lostNote} ` +
     `The comparison is against restarting this run from step 0.</span>`;
+  // The run was actually rescued, so the card reverts to what it preserved and
+  // the waste counter stops -- leaving it running would keep charging the user
+  // for time after the recovery that made it moot.
+  stopWasteCounter();
+  document.getElementById('ledger-time-label').textContent = 'Training Preserved';
+  document.getElementById('ledger-cost-label').textContent = 'Compute Not Re-Spent';
   document.getElementById('ledger-card').classList.add('active');
 }
 
@@ -1037,7 +1043,13 @@ function initCharts() {
 function refreshChartData() {
   Object.keys(charts).forEach(name => {
     const opt = buildOption(name, themeColors());
-    charts[name].setOption({ series: opt.series }, { notMerge: false, lazyUpdate: true });
+    // replaceMerge:'series' rather than a plain merge. ECharts merges series by
+    // index and keeps trailing ones the new array no longer has, so a chart
+    // that drops from 3 series to 2 -- vitals does exactly that when a run
+    // starts with no baseline to overlay -- kept drawing the previous run's
+    // curve at index 2 over the new run's data. Toggling the theme made it
+    // vanish, because that path already used notMerge.
+    charts[name].setOption({ series: opt.series }, { replaceMerge: 'series', lazyUpdate: true });
   });
   updateEmptyNotes();
   refreshOpenDataTables();
@@ -1292,6 +1304,10 @@ function enqueueThought(phase, message) {
 }
 
 let logCount = 0;
+// Oldest entries are dropped past this. The action log is a live feed, not the
+// run record -- Export Report is built from currentRun.events in the extension
+// host and is unaffected by this cap.
+const MAX_LOG_ENTRIES = 500;
 function addLogEntry(type, badge, message) {
   const container = document.getElementById('action-log-list');
   if (logCount === 0) container.innerHTML = '';
@@ -1305,7 +1321,61 @@ function addLogEntry(type, badge, message) {
     `<span class="log-badge ${badge}">${badge}</span></span><span class="log-msg"></span></span>`;
   item.querySelector('.log-msg').textContent = message;
   container.appendChild(item);
+  // Every non-JSON line the user's script prints becomes a log entry, so a
+  // script printing once per step over a long run grew this without limit --
+  // tens of thousands of nodes, degrading the 100ms chart tick along with it.
+  // MAX_DATAPOINTS caps the telemetry arrays; nothing capped the DOM.
+  while (container.childElementCount > MAX_LOG_ENTRIES) {
+    container.removeChild(container.firstElementChild);
+  }
   container.scrollTop = container.scrollHeight;
+}
+
+// ── Live waste counter ───────────────────────────────────────────────────────
+// The single largest measured saving in this project is not a recovery, it is
+// stopping sooner: in a diverging baseline run ARC knew the run had failed at
+// 3.81s and it ran to 50.96s, so 92.5% of that compute was spent after the
+// answer was already known (docs/WASTE_REDUCTION.md §3).
+//
+// That number had no live surface. The ledger only appeared on an intervention,
+// and both remaining structural rules are report-only, so the common case --
+// ARC knows the run is dead and will not act -- showed nothing at all. This
+// counts the waste as it accrues, from the moment of detection, so the figure
+// the user is deciding against is on screen while the decision is theirs.
+let wasteSince = null;
+let wasteTimer = null;
+
+function stopWasteCounter() {
+  if (wasteTimer !== null) { clearInterval(wasteTimer); wasteTimer = null; }
+  wasteSince = null;
+}
+
+function renderWaste() {
+  if (wasteSince === null) return;
+  const secs = (Date.now() - wasteSince) / 1000;
+  const mins = secs / 60;
+  document.getElementById('ledger-time').textContent =
+    secs < 90 ? `${secs.toFixed(0)}s` : `${mins.toFixed(1)}m`;
+  document.getElementById('ledger-cost').textContent =
+    '$' + ((secs / 3600) * gpuRate).toFixed(4);
+}
+
+function startWasteCounter(step, kind, reportOnly) {
+  if (wasteSince !== null) return;   // first detection owns the counter
+  wasteSince = Date.now();
+  document.getElementById('ledger-time-label').textContent = 'Burned Since Detection';
+  document.getElementById('ledger-cost-label').textContent = 'Cost Since Detection';
+  document.getElementById('ledger-detail').innerHTML =
+    `Failure detected @ step ${step} (${escapeText(shortKind(kind))}). ` +
+    (reportOnly
+      ? 'No intervention is known to help this failure, so training is continuing untouched. '
+      : '') +
+    `<br><span class="assumption">Compute spent since ARC knew, priced at ` +
+    `$${gpuRate.toFixed(2)}/hr (${escapeText(gpuRateSource)}). ` +
+    `Stopping now saves the remainder.</span>`;
+  document.getElementById('ledger-card').classList.add('active');
+  renderWaste();
+  wasteTimer = setInterval(renderWaste, 1000);
 }
 
 // Risk label -> color. Driven by the label the backend sent, not re-derived from
@@ -1348,6 +1418,12 @@ function handleMessage(msg) {
       // "clearly show current status" requirement makes a correctness issue,
       // not a cosmetic one.
       window._arcNonfinite = {};
+      stopWasteCounter();
+      document.getElementById('ledger-time-label').textContent = 'Training Preserved';
+      document.getElementById('ledger-cost-label').textContent = 'Compute Not Re-Spent';
+      document.getElementById('ledger-time').textContent = '0m';
+      document.getElementById('ledger-cost').textContent = '$0.00';
+      document.getElementById('ledger-detail').textContent = '—';
       // Priced from the `environment` event. A run that dies before emitting
       // one (bad interpreter, torch import failure) would otherwise be costed
       // at the previous run's GPU rate and labelled with its hardware.
@@ -1535,6 +1611,7 @@ function handleMessage(msg) {
         document.getElementById('alert-overlay').classList.add('active');
       }
       failures.push({ step: msg.step, kind: msg.kind || 'numerical' });
+      startWasteCounter(msg.step, msg.kind || 'numerical', isReportOnly(msg.kind));
       addLogEntry('failure', 'failure',
         `[Step ${msg.step}] ${shortKind(msg.kind)} — ${msg.reason || 'failure signature detected'}`);
       window.chartsNeedUpdate = true;
@@ -1669,6 +1746,9 @@ function handleMessage(msg) {
         addLogEntry('failure', 'failure', msg.message || 'Process exited with error.');
         updateStrip({ status: 'Error', outcome: msg.message || 'Process exited with error.', current: 'Idle', next: 'Check the action log below for details' }, true);
       }
+      // Whatever the outcome, the run is over -- the waste counter must not keep
+      // accruing against a process that is no longer burning anything.
+      stopWasteCounter();
       resetStopButtons();
       break;
 
