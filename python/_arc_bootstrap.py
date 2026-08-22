@@ -579,10 +579,39 @@ class OptimizerMonitor:
         # Loss-plateau state. Tracked per optimizer, not globally, so a GAN's
         # two optimizers plateau independently.
         self.best_loss = float("inf")
+        self.plateau_confirmed = False
         self.opening_losses: list[float] = []
         self.steps_without_improvement = 0
 
     # -- silent death ---------------------------------------------------------
+    def stall_ratio(self) -> float:
+        """How far this optimizer is toward a plateau verdict, 0.0–1.0+.
+
+        Feeds the risk gauge so it rises *with* the stall instead of staying at
+        LOW until the verdict lands and then contradicting the failure banner
+        beside it.
+
+        Gated on the same progress condition as `check_plateau`, and for the
+        same reason: a converging run's stalls also grow without bound, so
+        without the guard a healthy run at 87% would drive the gauge to HIGH.
+        Returns 0.0 whenever the run has actually got somewhere.
+        """
+        # Sticky once confirmed. The counter resets to 0 every time it reaches
+        # patience, so without this the gauge sawtooths on a dead run — climbing
+        # to HIGH, firing, dropping back to LOW, climbing again — which on screen
+        # reads as the run having recovered. It has not; nothing about a dead run
+        # improves after the verdict.
+        if getattr(self, "plateau_confirmed", False):
+            return 1.0
+        if self.steps_without_improvement <= 0 or not self.opening_losses:
+            return 0.0
+        opening = statistics.median(self.opening_losses)
+        if opening < 0:
+            return 0.0
+        if opening > 0 and self.best_loss / opening < LOSS_PLATEAU_PROGRESS_RATIO:
+            return 0.0
+        return self.steps_without_improvement / max(1, LOSS_PLATEAU_PATIENCE)
+
     def check_plateau(self, loss_val: float) -> tuple[str, str] | None:
         """Detect a run that has stopped learning while its loss stays finite.
 
@@ -689,6 +718,7 @@ class OptimizerMonitor:
         # progress figure rather than dividing by zero, which would throw inside
         # the path that runs while a failure is being handled.
         if opening == 0:
+            self.plateau_confirmed = True
             return (
                 "loss_plateau",
                 f"loss has failed to improve on its best value of {self.best_loss:.4f} "
@@ -701,6 +731,7 @@ class OptimizerMonitor:
             # unhelpful intervention the deleted rules were deleted for.
             return None
 
+        self.plateau_confirmed = True
         return (
             "loss_plateau",
             f"loss has failed to improve on its best value of {self.best_loss:.4f} "
@@ -1184,10 +1215,28 @@ def _resolve_monitor(optimizer):
 # Risk heuristic
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _risk_score(losses, grad_norm: float, is_bad: bool) -> tuple[float, str]:
+def _risk_score(losses, grad_norm: float, is_bad: bool, stall_ratio: float = 0.0) -> tuple[float, str]:
     if is_bad:
         return 1.0, "CRITICAL"
     risk = 0.0
+
+    # A silent death moves none of the signals below: the loss does not double,
+    # it sits still, and the gradient norm on a dead CIFAR run is about 0.07.
+    # Without this term the dashboard showed "FAILURE DETECTED — stalled" beside
+    # a risk gauge reading LOW / 0.0, and kept showing it for the rest of the
+    # run. The two panels are read together, so one flatly contradicting the
+    # other is worse than either being absent.
+    #
+    # `stall_ratio` is progress toward the plateau verdict (see
+    # OptimizerMonitor.stall_ratio), so the gauge climbs *during* the stall and
+    # is already HIGH when the marker lands, rather than jumping afterwards. It
+    # is gated on the same progress guard the rule itself uses, so a converging
+    # run — whose stalls also grow without bound — never raises it.
+    if stall_ratio >= 1.0:
+        risk += 0.6
+    elif stall_ratio >= 0.5:
+        risk += 0.3
+
     if len(losses) >= 5 and losses[0] > 0 and losses[-1] > losses[0] * 2.0:
         risk += 0.4
     if grad_norm > 10.0:
@@ -1327,7 +1376,8 @@ def _on_optimizer_step_inner(optimizer) -> None:
             if monitor.local_step % max(1, CHECKPOINT_EVERY) == 0:
                 monitor.store.save(step)
 
-    risk, label = _risk_score(list(STATE.loss_history)[-5:], grad_norm, is_bad)
+    risk, label = _risk_score(list(STATE.loss_history)[-5:], grad_norm, is_bad,
+                              monitor.stall_ratio() if monitor is not None else 0.0)
     STATE.risk = risk
     emit({"type": "risk", "score": round(risk, 4), "label": label})
 
