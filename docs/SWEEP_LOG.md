@@ -1,8 +1,10 @@
 # Sweep log
 
-Every A/B sweep run against the `loss_plateau` rule, in order, including the ones that were
-abandoned. `docs/experiment_ab.json` only ever holds the **latest** sweep — this file is the
-record of what came before it and why each one was superseded.
+Every A/B sweep, in order, including the ones that were abandoned.
+`docs/experiment_ab.json` only ever holds the **latest** sweep — this file is the record of what
+came before it and why each one was superseded. Sweeps 1 onward tested the `loss_plateau` rule;
+the *prior era* section below covers the earlier sweeps that produced the numbers still quoted
+for the two deleted rules.
 
 It exists because several numbers quoted throughout the docs come from sweeps that are no longer
 the shipped artifact. Without this page, a reader checking the JSON against the prose would find
@@ -244,6 +246,37 @@ depends on it.
 
 The false-positive fix is unaffected: it was measured across six healthy arms in two independent
 sweeps, and the rule stayed silent in all of them.
+
+---
+
+## Prior era — the entropy and update-ratio sweeps
+
+These predate the `loss_plateau` work and tested rules that **no longer exist in the code**.
+They are recorded here because two of their numbers are still quoted across the docs and appear
+in no committed JSON, which would otherwise look like invention.
+
+**The numbers:**
+
+| Figure | Where it came from | Quoted in |
+| :--- | :--- | :--- |
+| **87.43%** | `lr=0.25` control arm, final entropy-era sweep — the run the `gradient_entropy_collapse` rule took to 10.00% (chance) and then declared unrecoverable | `EXPERIMENT_RESULTS.md`, `FAQ_JUDGES.md`, `SECURITY_AUDIT.md` (C-7), `ARCHITECTURE.md`, `COMPETITIVE_LANDSCAPE.md`, `PITCH_DECK_CONTENT.md`, `DEMO_SCRIPT.md`, `FUTURE_IMPROVEMENTS.md` |
+| **76.19%** | `lr=0.25` control arm, an *earlier* entropy-era sweep — the same configuration that later measured 87.43%, which is the 11-point run-to-run gap cited as evidence for seeded pairs being noisy | `EXPERIMENT_RESULTS.md` |
+
+**Why there is no JSON.** `experiment_ab.json` holds only the latest sweep, and these were
+overwritten by later ones before the practice of archiving each sweep to its own file started.
+The archived files that do exist (`experiment_ab_sweep3_reduce_lr.json`,
+`experiment_ab_sweep5_rank_rule.json`) all postdate the entropy rule's deletion.
+
+**Why they cannot be re-measured.** `gradient_entropy_collapse` was deleted from
+`_arc_bootstrap.py`. Re-running the sweep today exercises different code and cannot reproduce a
+result produced by a rule that is gone. This is not a gap that more GPU time closes — the
+measurement is unreproducible by construction.
+
+**How to treat them.** They are real measurements of code that no longer ships, and every claim
+resting on them is a claim about *why a rule was deleted* — history, not current behaviour.
+Quote them as history and say so. Do not present either figure as a property of the shipped
+product, and do not use the 87.43% ↔ 76.19% spread as a current noise estimate: sweep 6 measured
+run-to-run spread on the shipped code and that is the number to use.
 
 ---
 

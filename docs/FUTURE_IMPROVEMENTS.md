@@ -818,14 +818,17 @@ fixed: the file is now `"complete": true` with all eight arms, and every figure 
 `first_failure_step` values and the per-epoch tables. [`SWEEP_LOG.md`](SWEEP_LOG.md)
 reproduces it row for row.
 
-What is left is narrower and older. **87.43%** and **76.19%** date from the entropy-rule era,
-before that rule was deleted, and appear in neither committed JSON —
-`experiment_ab.json` nor `experiment_ab_sweep3_reduce_lr.json`. They are still quoted across
-`EXPERIMENT_RESULTS.md`, `FAQ_JUDGES.md`, `COMPETITIVE_LANDSCAPE.md`, `PITCH_DECK_CONTENT.md`
-and `DEMO_SCRIPT.md`. `SWEEP_LOG.md` explicitly scopes itself to sweeps against the
-`loss_plateau` rule, so it does not cover them either, and a reader following the doc's own
-promise still cannot check them. Either re-run that configuration and restate from the new
-data, or mark both numbers as historical at each site.
+What is left is narrower, older, and now documented rather than open. **87.43%** and
+**76.19%** date from the entropy-rule era and appear in no committed JSON. They cannot be
+re-measured: `gradient_entropy_collapse` was deleted, so re-running that sweep exercises
+different code and cannot reproduce a result produced by a rule that no longer exists. More GPU
+time does not close this one.
+
+[`SWEEP_LOG.md`](SWEEP_LOG.md) now carries a *prior era* section recording both figures, where
+each came from, every document quoting them, and why no JSON exists — so a reader checking the
+prose against the data finds an explanation instead of an apparent invention. What remains
+outstanding is editorial: both numbers are claims about *why a rule was deleted*, and the sites
+quoting them should read as history rather than as properties of the shipped product.
 
 ---
 
