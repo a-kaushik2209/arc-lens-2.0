@@ -175,6 +175,9 @@ export function streamChatCompletion(
             } else if (currentEvent === "message_stop") {
               finish();
               return;
+            } else if (currentEvent === "error") {
+              fail(`Anthropic API error: ${parsed?.error?.message || JSON.stringify(parsed)}`);
+              return;
             }
           } else {
             const delta = parsed?.choices?.[0]?.delta?.content || parsed?.delta?.text;

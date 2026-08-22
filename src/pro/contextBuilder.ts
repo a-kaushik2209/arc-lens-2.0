@@ -114,7 +114,7 @@ export function buildSystemPrompt(
 
   const baselineSection = baseline?.points?.length
     ? `\n## Baseline Comparison ("${baseline.label}")\n${baseline.points
-        .map((p) => `[Step ${p.step}] loss=${p.loss === null ? "NaN" : p.loss.toExponential(3)}`)
+        .map((p) => `[Step ${p.step}] loss=${p.loss === null || p.loss === undefined ? "NaN" : exp(p.loss, 3)}`)
         .join("\n")}\n`
     : "";
 

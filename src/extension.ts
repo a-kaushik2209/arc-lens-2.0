@@ -987,10 +987,25 @@ function openGeneratorPanel(context: vscode.ExtensionContext) {
           const tmpFile = path.join(require("os").tmpdir(), `arc_gen_${Date.now()}.py`);
           fs.writeFileSync(tmpFile, code, "utf8");
           try {
-            const pythonPath = await resolveInterpreter(tmpFile);
+            // A tmpdir path belongs to no workspace folder, so resolving the
+            // interpreter *from* it falls through to bare "python3" on PATH
+            // instead of the project's configured venv/conda env. Resolve
+            // from a real in-workspace file instead, falling back to the
+            // tmp file only when there is no workspace context at all.
+            const referenceFile =
+              vscode.window.activeTextEditor?.document.uri.fsPath ??
+              vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ??
+              tmpFile;
+            const pythonPath = await resolveInterpreter(referenceFile);
             syntaxError = await new Promise<string | undefined>((resolve) => {
               cp.execFile(pythonPath, ["-m", "py_compile", tmpFile], (err, _stdout, stderr) => {
-                resolve(err ? (stderr?.trim() || "Syntax error in generated script.") : undefined);
+                if (!err) {
+                  resolve(undefined);
+                } else if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+                  resolve(`could not verify — Python interpreter "${pythonPath}" not found. Check arcAgent.pythonPath.`);
+                } else {
+                  resolve(stderr?.trim() || "Syntax error in generated script.");
+                }
               });
             });
           } finally {
