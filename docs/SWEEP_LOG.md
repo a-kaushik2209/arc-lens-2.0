@@ -4,10 +4,14 @@ Every A/B sweep run against the `loss_plateau` rule, in order, including the one
 abandoned. `docs/experiment_ab.json` only ever holds the **latest** sweep — this file is the
 record of what came before it and why each one was superseded.
 
-It exists because two of the numbers quoted throughout the docs (73.19% and 10.00% at `lr=0.5`)
-come from a sweep that is no longer the shipped artifact. Without this page, a reader checking
-the JSON against the prose would find a mismatch and have no way to tell whether it was a stale
-doc or an invented number. It is neither, and this is the proof.
+It exists because several numbers quoted throughout the docs come from sweeps that are no longer
+the shipped artifact. Without this page, a reader checking the JSON against the prose would find
+a mismatch and have no way to tell whether it was a stale doc or an invented number. It is
+neither, and this is the proof.
+
+**Read sweep 6 before quoting sweeps 3 or 5.** It withdrew the causal claims both of them
+produced. Their numbers are real; the attribution of those numbers to ARC's interventions is
+not established, because a sweep with nothing intervening reproduced a gap of the same size.
 
 All sweeps: `python python/experiment_ab.py --lrs 0.03 0.1 0.25 0.5 --epochs 10 --seed 1234`,
 `train_demo.py` on CIFAR-10, laptop RTX 3050, ~4.5 min per arm, ~36 min for a full 8-arm run.
@@ -74,9 +78,13 @@ Then the `lr=0.5` pair, which is the reason this file exists. Per-epoch:
 | 5 | **26.73%**, lr 2.56e-01 | 10.00%, lr 3.20e-02 |
 | 10 | **73.19%** | 10.00%, loss 2.3026 = ln(10) |
 
-Both arms sat at chance for four epochs — the detection was correct. But the control arm escaped
-on its own once cosine decay walked its LR down, and the intervened arm, already an order of
-magnitude below that, never did. **−63.19pp from a correct detection.**
+Both arms sat at chance for four epochs — the detection was correct. The control arm escaped on
+its own once cosine decay walked its LR down; the intervened arm, already an order of magnitude
+below that, never did. **−63.19pp.**
+
+> **Sweep 6 withdrew the attribution.** The same configuration split by 62.58 points with
+> *nothing* intervening in either arm, so this delta cannot be read as the intervention's
+> effect. The conclusion it prompted — report, do not act — survives on different grounds.
 
 **Outcome:** the *response* was falsified. `loss_plateau` became report-only. The full raw
 results are kept at
@@ -137,9 +145,15 @@ fired in both `lr=0.5` arms:
 | 5 | 28.32%, lr 2.56e-01 | 21.44%, lr **3.20e-02** |
 | 10 | **75.18%** | **30.84%** |
 
-−44.34pp, identical mechanism to sweep 3: the control arm escaped once cosine decay lowered the
-learning rate by itself; the arm ARC cut sat an order of magnitude below that and never caught
-up.
+−44.34pp, apparently the same mechanism as sweep 3: the control arm escaped once cosine decay
+lowered the learning rate by itself; the arm ARC cut sat an order of magnitude below that and
+never caught up.
+
+> **Sweep 6 withdrew this attribution too**, on the same evidence. Two sweeps showing the same
+> pattern looked like confirmation; a third showed the pattern occurs without any intervention
+> at all.
+
+Raw results: [`experiment_ab_sweep5_rank_rule.json`](experiment_ab_sweep5_rank_rule.json).
 
 **Outcome:** `representation_collapse` is report-only too. No structural rule is allowed to act
 any more. What still intervenes is a non-finite or exploded loss and a gradient norm above 50.
@@ -153,11 +167,88 @@ intervention lands.
 
 ---
 
-## Sweep 6 — pending
+## Sweep 6 — confirms the fix, and withdraws the causal claim
 
-**Rule under test:** both structural rules report-only.
+**Rule under test:** both structural rules report-only. This is the sweep in
+`docs/experiment_ab.json`.
 
-Not yet run. The code change is covered by tests (reverting `REPORT_ONLY_KINDS` in memory fails
-the behavioural ones), but no sweep has yet confirmed it end to end, and this row stays here
-saying so until one has. The expected result is that the `lr=0.5` pair converges to a single
-number the way `lr=0.25` did in sweep 5.
+```
+|  peak LR | arm      | best val acc | failures | interv. | first fail | verdict   |
+|     0.03 | baseline |       87.23% |        0 |       0 |          — | completed |
+|     0.03 | active   |       87.38% |        0 |       0 |          — | completed |
+|      0.1 | baseline |       87.14% |        0 |       0 |          — | completed |
+|      0.1 | active   |       87.37% |        0 |       0 |          — | completed |
+|     0.25 | baseline |       87.20% |        0 |       0 |          — | completed |
+|     0.25 | active   |       86.70% |        0 |       0 |          — | completed |
+|      0.5 | baseline |       72.58% |        8 |       0 |        316 | completed |
+|      0.5 | active   |       10.00% |        4 |       0 |        316 | completed |
+```
+
+**Zero interventions in all eight arms.** That is the change working: both structural rules
+detected and neither acted.
+
+**And the `lr=0.5` pair still split by 62.58 points.** Both arms ran identical code on an
+identical seed with an identical data order — nothing intervened in either — and their first
+four epochs agree to four decimal places:
+
+| epoch | baseline | active |
+| ---: | :--- | :--- |
+| 2 | train_loss 2.3110, 10.00% | train_loss 2.3110, 10.00% |
+| 3 | train_loss 2.3105, 10.00% | train_loss 2.3105, 10.00% |
+| 4 | train_loss 2.3098, 10.00% | train_loss 2.3098, 10.00% |
+| 5 | **2.1726, 21.07%** | 2.3091, 10.00% |
+| 10 | **72.58%** | **10.00%** |
+
+At epoch 5 one escaped the dead region and the other never did. Escape at this learning rate is
+**bistable**, and which side a run lands on is decided by floating-point nondeterminism —
+non-deterministic cuDNN kernels and non-associative CUDA reductions, which a seed does not fix.
+
+### This withdraws the causal claim from sweeps 3 and 5
+
+Those sweeps attributed −63.19pp and −44.34pp to ARC's interventions, and the per-epoch traces
+did show the intervened arms sitting at a much lower learning rate at the moment the control arm
+escaped. That reasoning is no longer sufficient, because a gap of the same size occurs with no
+intervention at all.
+
+Every `lr=0.5` arm run so far, 10 epochs, seed 1234:
+
+| sweep | arm | interventions | escaped? | final |
+| :--- | :--- | ---: | :--- | ---: |
+| 3 | baseline | 0 | yes | 73.19% |
+| 3 | active | 3 (`reduce_lr`) | no | 10.00% |
+| 5 | baseline | 0 | yes | 75.18% |
+| 5 | active | 3 (`rollback_and_reduce_lr`) | partly | 30.84% |
+| 6 | baseline | 0 | yes | 72.58% |
+| 6 | active | 0 | **no** | 10.00% |
+
+Three of four untouched runs escaped; neither intervened run did. That is **consistent with**
+the interventions hurting and is **not sufficient to establish it** at these sample sizes. The
+honest statement is that a single seeded A/B pair cannot attribute a difference at this learning
+rate, because the run-to-run spread is as large as any effect being measured.
+
+`EXPERIMENT_RESULTS.md` §5 said exactly this would happen — "the regime where interventions
+matter is by definition near the edge of stability, and that is precisely where tiny numerical
+differences amplify" — and it was still worth writing down when it did.
+
+### What does not change
+
+**No structural rule acts.** If anything sweep 6 strengthens that decision rather than
+undermining it: at the learning rates where an intervention would matter, the noise floor is
+larger than any effect a single pair can measure, so a response cannot be validated this way at
+all. Letting a rule act on evidence that cannot exist yet is the mistake this project keeps
+finding in itself.
+
+Validating any response needs repeated runs per configuration — `python/repeatability.py --lr 0.5
+--repeats N` — reported as a distribution, not a pair. That has not been done and no claim here
+depends on it.
+
+The false-positive fix is unaffected: it was measured across six healthy arms in two independent
+sweeps, and the rule stayed silent in all of them.
+
+---
+
+## Sweep 7 — pending
+
+**What it would measure:** repeatability at `lr=0.5`, several runs of one configuration, to get
+an error bar instead of an implied one. Until that exists, no delta at this learning rate should
+be quoted as an ARC effect in either direction.

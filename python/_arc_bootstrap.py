@@ -235,9 +235,21 @@ LOSS_PLATEAU_OPENING_SAMPLES = _env_int("ARC_PLATEAU_OPENING", 10)
 # moment of the plateau removed them and locked the collapse in. Interventions
 # turned a run that recovered to 73% into one that finished at chance.
 #
-# So the rule reports. Acting again needs a measured trajectory showing some
-# action actually helps a plateaued run — the same bar every other rule here
-# has to clear. See docs/EXPERIMENT_RESULTS.md.
+# A later sweep weakened that causal reading and strengthened the conclusion.
+# With nothing intervening in either arm, the same pair still split 72.58% vs
+# 10.00% — identical code, identical seed, identical data order, agreeing to
+# four decimals for four epochs before one escaped and the other did not.
+# Escape at this learning rate is bistable and decided by floating-point
+# nondeterminism, so a single seeded pair cannot attribute a difference to the
+# intervention at all. Across every lr=0.5 arm run: 3 of 4 untouched runs
+# escaped, 0 of 2 intervened ones did — consistent with the response hurting,
+# not sufficient to establish it.
+#
+# Which is a stronger reason to report and not act, not a weaker one: at the
+# learning rates where an intervention would matter, the noise floor is larger
+# than the effect being measured, so no response can be validated by a pair.
+# Acting again needs repeated runs per configuration showing a distribution
+# that separates — see docs/SWEEP_LOG.md and docs/EXPERIMENT_RESULTS.md.
 #
 # `representation_collapse` is here for the same reason, found by the sweep that
 # confirmed the plateau fix. It was the last structural rule still allowed to
@@ -249,11 +261,12 @@ LOSS_PLATEAU_OPENING_SAMPLES = _env_int("ARC_PLATEAU_OPENING", 10)
 #         5    28.32%  lr=2.56e-01      21.44%  lr=3.20e-02
 #        10    75.18%                   30.84%
 #
-# -44.34pp. Same mechanism as the plateau: the control arm escaped the dead
-# region once cosine decay lowered the learning rate by itself, and the arm ARC
-# cut sat an order of magnitude below that and never caught up. Rolling back
-# adds nothing either — the checkpoints in the ring are from the collapsed
-# region, which is where the model already is.
+# -44.34pp, and the same caveat as above applies to reading that as causation:
+# a later sweep produced a 62.58pp gap on this configuration with no
+# intervention in either arm. What survives is that the response has never been
+# shown to help, and rolling back cannot in principle — the checkpoints in the
+# ring are from inside the collapsed region, which is where the model already
+# is.
 #
 # The consequence is worth stating plainly: no structural rule is allowed to act
 # any more. Every one that was given the power either fired on healthy runs or

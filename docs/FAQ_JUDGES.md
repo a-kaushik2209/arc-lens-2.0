@@ -97,11 +97,16 @@ bottoms at 87.4%, so the trigger sat four times further away than a real collaps
 constant output while every weight matrix stays well-conditioned, so it measures weight
 conditioning rather than representational rank.
 
-**Then it fired, and it cost 44 points.** In the sweep run to confirm the plateau fix it tripped
-in both `lr=0.5` arms, and the arm it was allowed to act on was rolled back and cut three times:
-the control finished at **75.18%**, the intervened arm at **30.84%**. Same mechanism as the
-plateau — the control escaped once cosine decay lowered the LR on its own, and the cut arm sat
-an order of magnitude below that. It is report-only now.
+**Then it fired.** In the sweep run to confirm the plateau fix it tripped in both `lr=0.5`
+arms, and the arm it was allowed to act on was rolled back and cut three times: the control
+finished at **75.18%**, the intervened arm at **30.84%**. It is report-only now.
+
+If a judge asks whether that 44-point gap was really ARC's doing, the answer is **we don't
+know, and we checked**: the next sweep split the same configuration by 62.58 points with nothing
+intervening in either arm. Escape at that learning rate is bistable. Across every arm run there,
+3 of 4 untouched runs escaped and 0 of 2 intervened ones did — suggestive, not conclusive. The
+rule is report-only because nothing shows the response helps, and because at these learning
+rates a single A/B pair cannot show it either way.
 
 That gap is what the **loss-plateau** rule closes. A CIFAR-10 run at lr=0.5 finished at chance
 accuracy with its loss pinned at ln(10) and ARC reported **zero failures across 780 steps** —
@@ -117,13 +122,19 @@ is above 0.60, which is 0.271 on a healthy run and 0.888 on a dead one.
 
 **Then the sweep went against the rule a second time, on its response.** It shipped cutting the
 learning rate. On the `lr=0.5` pair both arms sat at chance for four epochs — the detection was
-right — but the control arm then escaped on its own, because cosine decay had walked its LR
-down to ~2.5e-01, and it finished at **73.19%**. The arm ARC intervened on had been cut to
-3.2e-02 and finished at **10.00%**. Large steps were the only thing that could carry the
-weights out of the dead region, and the intervention removed them: **−63.19pp from a correct
-detection.** The rule is now report-only. We are reporting both of these because it is the
-third and fourth time measurement has gone against a rule we had already written, and that is
-the part of this project worth trusting.
+right — but the control arm then escaped on its own and finished at **73.19%**, while the arm
+ARC cut finished at **10.00%**.
+
+**And then a third sweep withdrew that attribution.** With nothing intervening in either arm,
+the same configuration split **72.58% vs 10.00%** — 62.58 points from floating-point
+nondeterminism, on identical code with an identical seed. So the rule is report-only not because
+we measured its response costing 63 points, but because nothing shows the response helps and the
+noise floor at these learning rates is larger than the effect, which means a pair cannot settle
+it in either direction.
+
+We are reporting all of this because it is the third, fourth and fifth time measurement has gone
+against something we had already written and shipped — including a claim in the previous commit
+of this same branch. That is the part of this project worth trusting.
 
 We also fixed a bug that made the rank rule structurally blind: baselines were captured *after*
 a 200-step warmup, so a run dying before then had its reference measured on the corpse — the
@@ -133,7 +144,8 @@ waits for the warmup.
 
 **Detection is not rescue, and we say so.** The plateau rule leaves accuracy at 10.00% because
 it takes no action. Neither available response survives measurement: the LR cut made the run
-63 points worse, and a rollback cannot help either, since confirming a stall takes 300 steps
+63 points lower in one pair — though see the caveat above on attributing that — and a rollback
+cannot help either, since confirming a stall takes 300 steps
 while the network dies around step 45, so every checkpoint in the ring is post-collapse. The
 claim is that ARC reports a silent death instead of showing a green dashboard for 780 steps,
 not that it recovers one.
@@ -364,8 +376,8 @@ Three things a manual checkpoint script doesn't give you for free: automatic *de
 (restoring weights and adjusting LR without you writing that logic per project), and signals
 you likely aren't logging yourself — effective rank, gradient entropy, update ratio and flow
 ratio, charted live. The caveat on that third item is real: only effective rank is wired to a
-trigger, and it no longer acts — the one sweep where it fired, acting on it cost 44 points
-against the control arm. The gradient-entropy rule was deleted
+trigger, and it no longer acts — in the one sweep where it fired, the arm that acted finished
+44 points below the control. The gradient-entropy rule was deleted
 after it cost a healthy run 77 points of accuracy (Q5). The one silent failure we *do* catch is
 a loss plateau, and that is read off the loss itself rather than off any of these four signals.
 So the honest version is "signals you aren't charting", not "failures we catch before the loss
@@ -540,6 +552,7 @@ Validation pass, from running the code the two tables above describe as fixed:
 | Fixed | C-9 | A real lr=0.5 run finished at 10.00% — chance — with its loss pinned at ln(10), and ARC reported zero failures across all 780 steps; no rule could see a run that is dead but numerically healthy. Added `loss_plateau` (82 vs 764 stalled steps, healthy vs dead) |
 | Fixed | C-11 | The first `loss_plateau` fired on a **healthy** run — 87.5% accuracy, twice — over 3900 steps: convergence is itself a plateau, and the best-ever-loss counter makes stalls unbounded on a successful run. Patience cannot fix it; added a progress condition (`best/first loss > 0.60`, measured 0.271 healthy vs 0.888 dead) |
 | Fixed | C-10 | Structural baselines were captured *after* the 200-step warmup, so a run dying earlier had its reference measured post-collapse — the dead arm scored 99.72% of its own baseline against the healthy arm's 98.69%. Baseline now captured from the opening samples; the verdict still waits for the warmup |
+| Open | — | The `lr=0.5` deltas that motivated C-12 and C-13 are **not attributable**. A sweep with nothing intervening in either arm split the same configuration 72.58% vs 10.00% — 62.58pp from floating-point nondeterminism on identical code and seed. Escape at that learning rate is bistable, so a single A/B pair cannot measure an intervention's effect there in either direction. Needs `repeatability.py --lr 0.5 --repeats N` and a distribution, not a pair. The report-only decision stands on the absence of any evidence the responses help |
 | Fixed | C-13 | `representation_collapse` — the last structural rule still allowed to act — fired for the first time and reproduced C-12 exactly. At `lr=0.5` the control arm recovered to 75.18% while the arm it rolled back and cut three times finished at 30.84%, a −44.34pp delta. It is report-only now, which means **no structural rule acts any more**: all four that were ever given the power either fired on healthy runs or damaged failing ones |
 | Open | — | `representation_collapse` fires rarely and its 50% trigger is far from what most failing runs reach — a dead run bottomed at 87.4% of its step-1 rank in one measurement — because the signal measures weight conditioning rather than representational rank. It detects and reports; it is not a demonstrated capability |
 | Open | — | `loss_plateau`'s progress guard assumes a run has real headroom from its opening loss. Fine-tuning a pretrained model does not — it can legitimately converge after a 10% improvement, which reads as "never got anywhere" and would trip the rule. Calibrated for training from scratch; needs a different reference and fresh measurement before it is used on fine-tuning |

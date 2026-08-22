@@ -116,9 +116,12 @@ user picks — none of them compute effective rank by default). That's a concret
 a judge can verify against the code, unlike "we do anomaly detection" (everyone in the table
 does some version of that).
 
-Say "targets", not "catches". The rank rule fired for the first time in the latest sweep, and
-the arm it was allowed to act on went from a control-arm 75.18% to 30.84% — so it is now
-report-only, like the plateau rule. For most runs it does not fire at all: the threshold sits at
+Say "targets", not "catches". The rank rule fired for the first time in a recent sweep, and the
+arm it was allowed to act on went from a control-arm 75.18% to 30.84% — so it is now
+report-only, like the plateau rule. If pushed on whether the intervention caused that, say no:
+a later sweep split the same configuration by 62 points with nothing intervening at all, so the
+attribution does not hold and the rule is report-only for the stronger reason that no response
+has ever been shown to help. For most runs it does not fire at all: the threshold sits at
 50% of baseline while a healthy run bottoms at 97.2%, and it measures weight conditioning rather
 than representational rank. The silent failure we *do* catch is a loss plateau, read off the
 loss itself rather than off any structural signal.
@@ -198,8 +201,9 @@ signals" is a research direction here, not a shipped advantage.
 **"Why not just use gradient clipping / `EarlyStopping(check_finite=True)`?"**
 Because clipping only addresses gradient-norm blowups (it does nothing for NaN loss that's
 already propagated, and nothing for representation collapse, which shows no gradient spike at
-all — while conceding that our rank rule for that case detects but no longer acts, because
-acting on it was measured to cost 44 points), and
+all — while conceding that our rank rule for that case detects but no longer acts, because no
+measurement shows the response helping and the noise floor where it matters is too large for a
+single A/B pair to settle), and
 `EarlyStopping` **stops** the run rather than recovering it — the user still loses the
 run and has to manually restart, re-tune LR, and hope it doesn't recur. Both are real, standard,
 free tools already in every practitioner's toolbox — say so, don't pretend they don't exist.

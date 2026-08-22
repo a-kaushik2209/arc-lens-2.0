@@ -153,7 +153,8 @@ script still surfaces.
 | `failure_detected` | `step`, `kind`, `reason`, `loss`, `grad_norm` | A threshold was crossed |
 | `thought` | `phase`, `message` | One agent step |
 | `intervention` | `action`, `detail`, `step` | A recovery tool ran |
-| `unrecoverable` | `step`, `kind`, `attempts`, `message` | Futility breaker tripped |
+| `unrecoverable` | `step`, `kind`, `attempts`, `message` | Futility breaker tripped after repeated failed recoveries |
+| `detection_silenced` | `step`, `kind`, `attempts`, `message` | A report-only rule has stopped repeating itself. Deliberately *not* `unrecoverable`: ARC never acted, so it cannot claim the run is past saving |
 | `degraded` | `component`, `message` | Instrumentation is impaired |
 | `checkpoint_budget` | `bytes_per_checkpoint`, `total_bytes`, `location` | Memory cost of checkpointing |
 | `run_summary` | `steps`, `backward_calls`, `optimizer_steps`, `interventions`, `degraded` | Emitted at the end |
@@ -346,7 +347,7 @@ Report-only is enforced in `_handle_failure` above the cooldown and baseline gat
 arms execute identical code for this kind, and above the `optimizer.zero_grad()` at the end of
 that function — which would otherwise discard the user's update and make "no action" false.
 
-**`representation_collapse` fired for the first time, and cost 44 points.** For a long time it
+**`representation_collapse` fired for the first time, and the arm that acted on it lost 44 points.** For a long time it
 never fired at all: the threshold sits far from anything a working run reaches — a healthy
 model's rank bottoms at 97.2% of its step-1 baseline — and further than the *dead* run we had
 measured, which bottoms at 87.4%. `mean_effective_rank` is the SVD entropy of the weight
@@ -363,10 +364,12 @@ the arm it was allowed to act on was wrecked:
 | 5 | 28.32%, lr 2.56e-01 | 21.44%, lr **3.20e-02** |
 | 10 | **75.18%** | **30.84%** |
 
-−44.34pp, by the same mechanism as the plateau: the control arm escaped once cosine decay
-lowered the learning rate by itself, and the arm ARC cut sat an order of magnitude below that
-and never caught up. The rollback adds nothing either — the checkpoints in the ring are from
-inside the collapsed region, which is where the model already is.
+−44.34pp, apparently by the same mechanism as the plateau. A later sweep withdrew that
+attribution: with nothing intervening in either arm the same configuration split by 62.58
+points, so escape here is bistable and a single pair cannot tell a bad response from a bad coin
+flip. What stands regardless is that no measurement shows the response helping, and the rollback
+cannot in principle — the checkpoints in the ring are from inside the collapsed region, which is
+where the model already is. See [`EXPERIMENT_RESULTS.md`](EXPERIMENT_RESULTS.md) §4c.
 
 It is now report-only too. **No structural rule is allowed to act.** Every rule that was given
 the power either fired on healthy runs or damaged failing ones; what still acts is numerical
