@@ -1,5 +1,6 @@
 import * as https from "https";
 import { getOpenRouterKey, getLLMModel } from "./licenseManager";
+import { providerFor, modelForProvider } from "./providerRouting";
 
 const OPENROUTER_HOST = "openrouter.ai";
 const OPENROUTER_PATH = "/api/v1/chat/completions";
@@ -30,47 +31,33 @@ export function streamChatCompletion(
     return () => {};
   }
 
-  const isGroq = apiKey.startsWith("gsk_") || apiKey.includes("groq");
-  const isAnthropic = apiKey.startsWith("sk-ant-") || apiKey.includes("anthropic");
-  const isGemini = apiKey.startsWith("AIzaSy") || apiKey.includes("gemini") || apiKey.includes("google");
-  const isOpenAI = (apiKey.startsWith("sk-") && !apiKey.startsWith("sk-or-") && !apiKey.startsWith("sk-ant-")) || apiKey.includes("openai");
+  const provider = providerFor(apiKey);
+  const isAnthropic = provider === "anthropic";
 
   let hostname = OPENROUTER_HOST;
   let path = OPENROUTER_PATH;
-  let model = getLLMModel();
+  const model = modelForProvider(provider, getLLMModel());
   let headers: { [key: string]: string } = {
     "Content-Type": "application/json"
   };
 
-  if (isGroq) {
+  if (provider === "groq") {
     hostname = "api.groq.com";
     path = "/openai/v1/chat/completions";
     headers["Authorization"] = `Bearer ${apiKey}`;
-    if (!model.includes("llama") && !model.includes("mixtral")) {
-      model = "llama-3.3-70b-versatile";
-    }
-  } else if (isAnthropic) {
+  } else if (provider === "anthropic") {
     hostname = "api.anthropic.com";
     path = "/v1/messages";
     headers["x-api-key"] = apiKey;
     headers["anthropic-version"] = "2023-06-01";
-    if (!model.includes("claude")) {
-      model = "claude-opus-5";
-    }
-  } else if (isGemini) {
+  } else if (provider === "gemini") {
     hostname = "generativelanguage.googleapis.com";
     path = "/v1beta/openai/chat/completions";
     headers["Authorization"] = `Bearer ${apiKey}`;
-    if (!model.includes("gemini")) {
-      model = "gemini-1.5-flash";
-    }
-  } else if (isOpenAI) {
+  } else if (provider === "openai") {
     hostname = "api.openai.com";
     path = "/v1/chat/completions";
     headers["Authorization"] = `Bearer ${apiKey}`;
-    if (!model.startsWith("gpt-")) {
-      model = "gpt-4o-mini";
-    }
   } else {
     // OpenRouter (default)
     hostname = OPENROUTER_HOST;

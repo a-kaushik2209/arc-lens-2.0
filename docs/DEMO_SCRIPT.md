@@ -17,7 +17,7 @@ Do this at least 30 minutes before your slot, not 2 minutes before.
 1. **Install and compile**
    ```bash
    npm install && npm run compile
-   npm test                        # 47 tests, all green
+   npm test                        # 54 tests, all green
    ```
    On Windows, if `npm run compile` reports `'tsc' is not recognized`, `npm install` was run
    from a shell that skipped the `.cmd` shims. Re-run `npm install` from PowerShell or cmd —

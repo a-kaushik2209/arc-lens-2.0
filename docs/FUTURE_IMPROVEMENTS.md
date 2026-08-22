@@ -406,7 +406,7 @@ Both fixed in `arc-training` (same author, AGPL). A third fix there —
 was a large part of the overhead in 2.2.
 
 ### 2.6 Test the pure functions
-**Effort: 3 h · Impact: medium — Status: done, 91 tests plus CI**
+**Effort: 3 h · Impact: medium — Status: done, 98 tests plus CI**
 
 See [L-6](SECURITY_AUDIT.md).
 
@@ -423,6 +423,14 @@ run at all), asserts the CSP is nonce-based with no `'unsafe-inline'`, asserts n
 
 **`tests/ring-buffer.test.js`** and **`tests/model-name.test.js`** — the two helpers extracted
 from `extension.ts` so they could be tested at all.
+
+**`tests/provider-routing.test.js`** — which provider an API key routes to, and which model id
+that provider is sent. The property under test is that *no native provider is ever handed
+OpenRouter formatting*, which is the general form of the bug that motivated the file: the
+shipped `arcAgent.llmModel` default is an OpenRouter string, three providers replaced it by
+accident, and Gemini's substring guard let it through to Google verbatim. `providerRouting.ts`
+exists as a separate module for the same reason `modelName.ts` does — `chatManager.ts` reaches
+`vscode` transitively, so the routing decision had to move somewhere importable to be testable.
 
 **`tests/test_harness.py`** — risk heuristic, the JSON finite-guard, the structural detector
 (including that a single bad sample is treated as noise and that the precursor rule is not
@@ -507,7 +515,7 @@ path to real usage than the VS Code extension.
 | 2.3 | Fix traceback line numbers | 2 h | Med-High | Trust | ✅ Done (`runpy`, zero injected lines) |
 | 2.4 | Bound checkpoint memory | 3 h | Med-High | Trust | ✅ Done (host-resident store, budget reported) |
 | 2.5 | Visible degradation | 2 h | Med-High | Trust | ✅ Done — found 2 real upstream bugs |
-| 2.6 | Tests + CI | 3 h | Medium | Trust | ✅ Done (91 tests, 3 CI jobs incl. secret scan) |
+| 2.6 | Tests + CI | 3 h | Medium | Trust | ✅ Done (98 tests, 3 CI jobs incl. secret scan) |
 | — | **Structural detection reachable at all** *(not in the original plan)* | — | Medium | Trust | ⚠️ Done, then mostly walked back — see below |
 | 3.1 | Hybrid LLM recovery loop | 2 d | High | Later | Open — deliberate, see below |
 | 3.2 | DDP / FSDP support | 1 w | High | Later | Open — deliberate, see below |
@@ -691,7 +699,7 @@ way to test the *rules* but means the collector integration path has no coverage
 consequence showed up the first time the extension was run end to end on a real script: two
 crashing bugs in `arc-training` — `GradientCollector`'s `register_full_backward_hook` failing
 on any `inplace=True` activation, and `WeightCollector` comparing a CPU-cached snapshot against
-a CUDA weight — were caught by neither the 91 tests nor the three CI jobs. Both were invisible
+a CUDA weight — were caught by neither the test suite nor the three CI jobs. Both were invisible
 for structural reasons rather than by accident: `test_harness.py` never builds a model with
 `inplace=True` (only `train_demo.py` does), and CI installs CPU-only torch, so a
 CPU-vs-CUDA device mismatch cannot trigger there under any circumstances. A single end-to-end
