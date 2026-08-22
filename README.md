@@ -73,6 +73,17 @@ they just no longer get to steer it.
 Full record of every sweep, including the two killed mid-run and the withdrawn claims, in
 [`docs/SWEEP_LOG.md`](docs/SWEEP_LOG.md).
 
+**Which is why the interface is the product, not the packaging.** If ARC can reliably detect a
+silent death and cannot safely fix one, then what it produces is not a rescue — it is a person
+being told, in time, in terms they can act on. Measured: in a diverging baseline run ARC knew the
+run had failed at **3.81 s**, and the run continued to **50.96 s** because nothing stopped it.
+**92.5 % of that compute was spent after the answer was already known.** Closing that gap is not
+a detection problem; it is a question of whether the state of the run is legible fast enough to
+act on. That is what the status strip, the ARIA live region, the preflight and the chart data
+tables are for, and it is why the accessibility work and the compute saving are the same work.
+The full argument and every measurement, including the two that came back negative, are in
+[`docs/WASTE_REDUCTION.md`](docs/WASTE_REDUCTION.md).
+
 ---
 
 ## How it works

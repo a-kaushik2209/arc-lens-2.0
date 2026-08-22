@@ -9,6 +9,56 @@ machine in the same session. Where the win is small, or absent, that is what is
 reported. Numbers that were not measured are marked as not measured rather than
 estimated.
 
+---
+
+## The argument: legibility *is* the waste reduction
+
+The challenge asks for the part of the MVP most related to accessibility to be
+improved so that it cuts waste. Those read like two separate deliverables — make
+it accessible, and separately make it cheaper. In this product they are the same
+work, and the measurement is what shows it.
+
+**Start from the thing ARC cannot do.** Four structural detection rules have been
+built here. Two were deleted for firing on healthy runs; the two that remain were
+stripped of the power to act, because every response that was tried made a
+recoverable run worse — and a later sweep showed the run-to-run spread at those
+learning rates is larger than any effect a single A/B pair can measure
+([`SWEEP_LOG.md`](SWEEP_LOG.md)). ARC detects a silent death reliably. It cannot
+fix one.
+
+**So the product's output is not a rescue. It is a human being told, in time.**
+That reframes what the accessibility work is for. A status strip that names the
+current state and the next step, an ARIA live region that escalates to assertive
+only on failure, a preflight that fails with a named cause instead of a
+traceback, and a data-table equivalent for every canvas chart — none of that is
+decoration around the real feature. For a failure ARC has decided not to act on,
+**it is the entire feature.**
+
+**And the waste it saves is measurable, because the gap it closes is.** In a
+baseline run at `lr=3.0`, ARC knew the run had failed at **3.81 s**. The run
+continued to **50.96 s**, because nothing stopped it — **92.5 % of that run's
+compute was spent after the answer was already known** (§3, reproduced at 89.8 %
+on a second run). Nothing about that gap is a detection problem. It is entirely a
+question of whether the person watching can tell what happened and what to do,
+fast enough to act — which is the definition of the accessibility work.
+
+The same holds in the other direction. The telemetry that feeds the dashboard was
+emitting one event per optimizer step; coalescing it while healthy cuts stdout by
+**72.2 %** at **zero** wall-clock cost (§2). That is a bandwidth and storage
+saving that exists *because* the display is driven by a policy about what a human
+needs to see, rather than by the training loop's step rate.
+
+**What this section is not claiming.** That the 90 % figure is money already
+saved — it is the size of the opportunity the Stop button addresses, on a
+53-second demo, and it scales with run length rather than being large in absolute
+terms here. That preflight saves time — measured, and it does not (§1). That the
+telemetry saving is switched on — it is not, by default (§2). Those three are
+recorded as prominently as the wins, because a submission whose favourable
+numbers are checkable and whose unfavourable ones are volunteered is the only
+kind worth putting in front of a judge who will check.
+
+---
+
 ## Test environment
 
 | | |
