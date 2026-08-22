@@ -2,10 +2,10 @@
 
 **Team Heisen-bug (U333WKR8) · Challenge #171: Accessibility — Resource Waste Reduction**
 
-~1,560 words. 8–8.5 minutes at a normal pace. Slide cues in brackets — not spoken. If your slot
-is 7 minutes, cut the 3:00 demo-config beat (fold one sentence of it into 0:50) and tighten the
-Q&A caveat at 3:25 to one sentence — that recovers ~45s without losing a beat the rubric table
-depends on.
+~1,500 words. 8 minutes at a normal pace. Slide cues in brackets — not spoken. For a 7-minute
+slot, cut the 3:00 demo-config beat entirely and fold its one load-bearing line — "nothing is
+injected, ARC has to detect this rather than be told where it is" — into 0:50. That's the only
+cut that costs nothing on the rubric table below.
 
 Every number traces to `docs/WASTE_REDUCTION.md`, with the method that produced it.
 
@@ -62,10 +62,9 @@ gradient accumulation doesn't inflate the step count, mixed precision reports un
 and a GAN with two optimizers doesn't get confused. Hook `backward()` instead and all three of
 those are wrong, not just noisy.
 
-Rollback is the hard part. Checkpoints sit in host RAM in a ring buffer under a byte budget, and
-restoring one means writing weights back into a live model mid-run and getting the optimizer to
-continue against them — while an LR scheduler rewrites the learning rate every step and tries to
-undo our correction. That case is tested.
+Rollback is the hard part: writing weights back into a live model mid-run, from a checkpoint
+ring-buffered in host RAM under a byte budget, while an LR scheduler is rewriting the learning
+rate every single step and actively trying to undo the correction. That case is tested.
 
 The user's script runs unmodified through `runpy`, so their tracebacks report their own line
 numbers. Zero code changes to integrate — no import, no callback, no decorator.
@@ -109,10 +108,10 @@ move is to restart from step 0.
 18% by epoch 3, 32% by epoch 4, **46.6% by epoch 5** and still rising when the schedule ends.
 **Plus 36.6 points against an identically seeded control.**
 
-One caveat I'll say before anyone asks: the recovered arm is 33% *slower* in wall clock, because
-recovering costs more than letting a dead run coast. ARC didn't make this run cheaper. It turned
-85 wasted seconds into 113 productive ones. The alternative was never "a faster good run" — it
-was "restart and hope."
+One caveat before anyone asks: the recovered arm is 33% *slower* in wall clock — recovering costs
+more than letting a dead run coast. ARC didn't make this run cheaper. It turned 85 wasted seconds
+into 113 productive ones. The alternative was never "a faster good run," it was "restart and
+hope."
 
 ---
 
@@ -162,13 +161,10 @@ or *estimated*, on screen.
 That audit found five fabrications. The worst: when a risk score was absent, the gauge rendered
 `0.00` — which reads as **safe**. On a gauge whose entire job is saying when a run is not safe,
 that's fabricating in the one direction that matters. Fixed, and the test now checks the field's
-presence rather than its truthiness, because zero is a legitimate value for lr and GPU memory.
-
-One more, found the same way: the learning-rate and gradient-norm charts sit on a log axis, and
-our own demo's schedule computes a learning rate of exactly zero at the first step and the last
-step of every run. Log of zero is undefined, so the chart didn't plot it low — it silently
-dropped the point, on stage, at both ends of the exact run we demo. Fixed the same way: filtered
-before it reaches the axis, so a missing point reads as a gap, not a floor value we made up.
+presence rather than its truthiness, because zero is a legitimate reading for lr and GPU memory,
+just not for risk. The same pass caught the opposite failure on the same chart: a *real* zero
+learning rate — which the demo's own schedule produces at the start and end of every run — was
+silently dropping off the log-scaled chart instead of showing at all.
 
 Dollar and energy figures are labelled estimates every time they appear. An unlabelled dollar
 amount would be the same class of problem.
@@ -184,8 +180,8 @@ real training loops end to end. Several were written before the code they cover 
 bugs doing it, including one where an optimizer was matched to a wrapper module instead of the
 submodule it updates — that would have rolled back both halves of a GAN. CI fails the build on
 any secret-shaped literal. LLM features are bring-your-own-key, so no credential and no token
-cost sits on our side. And it's not just tested on the machine that wrote it — it's packaged and
-installed clean on a second one.
+cost sits on our side. And none of this is just tested on the machine that wrote it — the
+package builds and installs clean on a second one.
 
 Against the field: W&B alerts. Comet watches deployed models for drift. Lightning's
 `EarlyStopping` stops the run. Composer restarts the whole job after a hardware fault. None of
