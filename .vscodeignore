@@ -22,6 +22,10 @@ private_backup/**
 tests/**
 .github/**
 .bench_workload.py
+**/.pytest_cache/**
+*.jpeg
+*.jpg
+FAR_AWAY_2026_Task_U333WKR8.txt
 
 # python/ is deliberately NOT excluded.
 #
