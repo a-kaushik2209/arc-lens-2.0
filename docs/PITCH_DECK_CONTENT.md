@@ -162,7 +162,7 @@ the first place.
 
 ### Slide 7 — Traction / Validation
 
-**Headline:** Tested across 9 architectures, 10M–117M parameters.
+**Headline:** Tested across 8 architectures, 10M–117M parameters.
 
 *(Label this slide clearly: "Internal testing — not yet independently verified" in the
 footer, and say the words out loud when presenting it.)*
@@ -181,7 +181,7 @@ footer, and say the words out loud when presenting it.)*
 - Validated against 9 real architectures from 10M to 117M parameters (NanoGPT, ResNet-50,
   YOLOv11, GPT-2 Small/Medium, Stable Diffusion U-Net, Llama-style, ViT-Base), each recovering
   from an injected failure (LR spikes, NaN bombs, gradient explosions).
-- `arc-training` is published and live on PyPI (`5.0.0`); ARC Lens `v0.1.0`+ is packaged and
+- `arc-training` is published and live on PyPI (`5.0.0`); ARC Lens (`0.3.8`) is packaged and
   submission-ready.
 
 ---

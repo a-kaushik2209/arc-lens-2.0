@@ -15,7 +15,12 @@
   --panel-border: #232328;
   --text-primary: #f4f4f5;
   --text-secondary: #8b8b93;
-  --text-tertiary: #5a5a63;
+  /* Was #5a5a63 — 2.72:1 on the panel, below WCAG AA. It is used for real
+     content, not decoration: log timestamps, the provenance caption, and the
+     assumption lines under every cost figure. Raised until it passes on both
+     the panel and the page background (4.74:1 / 5.06:1) while staying visibly
+     dimmer than --text-secondary. */
+  --text-tertiary: #80808a;
   --header-bg: rgba(10, 10, 12, 0.88);
   --panel-shadow: 0 1px 0 rgba(255,255,255,0.04) inset, 0 6px 20px rgba(0, 0, 0, 0.35);
   --grid-line: #1c1c21;
@@ -35,7 +40,10 @@
   --panel-border: #e4e4e8;
   --text-primary: #0a0a0c;
   --text-secondary: #6b6b74;
-  --text-tertiary: #a0a0a8;
+  /* Was #a0a0a8 — 2.60:1 on white. Same reasoning as the dark theme; the light
+     palette leaves a narrow window between "passes AA" and "dimmer than
+     secondary", and legibility wins it. 5.04:1 on panel, 4.67:1 on page. */
+  --text-tertiary: #6e6e78;
   --header-bg: rgba(255, 255, 255, 0.9);
   --panel-shadow: 0 1px 0 rgba(255,255,255,0.6) inset, 0 8px 16px -4px rgba(0,0,0,0.06);
   --grid-line: #ececef;
@@ -134,7 +142,7 @@ header {
 .status-idle { background: transparent; color: var(--text-secondary); border: 1px solid var(--panel-border); }
 .status-running { background: rgba(34, 197, 94, 0.1); color: var(--accent-green); border: 1px solid rgba(34, 197, 94, 0.3); }
 .status-warning { background: rgba(245, 158, 11, 0.1); color: var(--accent-orange); border: 1px solid rgba(245, 158, 11, 0.3); }
-.status-critical { background: rgba(239, 68, 68, 0.1); color: var(--accent-red); border: 1px solid rgba(239, 68, 68, 0.4); animation: pulse 2s infinite; }
+.status-critical { background: rgba(239, 68, 68, 0.1); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); animation: pulse 2s infinite; }
 /* A reliability tool must never let "instrumentation is broken" look like
    "your run is healthy". These two badges are the visible half of that. */
 .status-degraded { background: rgba(245, 158, 11, 0.12); color: var(--status-degraded-text); border: 1px solid rgba(245, 158, 11, 0.45); cursor: help; }
@@ -178,7 +186,13 @@ header {
 .banner.visible { display: block; }
 .banner .banner-title { font-weight: 700; color: var(--accent-red); margin-bottom: 3px; letter-spacing: 0.02em; }
 
-@keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.6; } 100% { opacity: 1; } }
+/* Fades the border and glow, never the text. Pulsing `opacity` on the whole
+   badge dropped the label to 2.51:1 for half of every cycle — a status that is
+   only legible half the time is exactly the wrong one to make hard to read. */
+@keyframes pulse {
+  0%, 100% { border-color: rgba(239, 68, 68, 0.75); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.35); }
+  50%      { border-color: rgba(239, 68, 68, 0.30); box-shadow: 0 0 0 4px rgba(239, 68, 68, 0); }
+}
 
 .btn-stop {
   background: var(--text-primary); color: var(--bg-color); border: none; padding: 6px 14px;
@@ -485,7 +499,7 @@ header {
 .log-time { color: var(--text-tertiary); min-width: 68px; }
 .log-badge { padding: 2px 6px; border-radius: 3px; font-weight: 700; font-size: 9px; text-transform: uppercase; letter-spacing: 0.04em; }
 .log-badge.intervention { background: rgba(34, 197, 94, 0.1); color: var(--accent-green); }
-.log-badge.failure { background: rgba(239, 68, 68, 0.1); color: var(--accent-red); }
+.log-badge.failure { background: rgba(239, 68, 68, 0.1); color: #f87171; }
 .log-badge.info { background: rgba(59, 130, 246, 0.1); color: var(--accent-blue); }
 .log-msg { color: var(--text-primary); flex: 1; }
 
@@ -884,35 +898,21 @@ function rolledBackSteps(detail) {
   return m ? parseInt(m[1], 10) : 0;
 }
 
+// The preserved figure has to keep counting, not freeze at the instant of the
+// rescue. A numerical failure is caught within seconds — at step 6 of 1950 in
+// the default demo — so a snapshot taken here reads "<1m / $0.00" and shows a
+// successful recovery as having saved nothing. What was actually preserved is
+// every second the run goes on to spend *not* being restarted from step 0, and
+// that accrues for the rest of the run. renderSaved() does that accrual, on a
+// conservative basis: elapsed wall clock scaled by the fraction of steps that
+// survived the rollback, so discarded steps are never counted as saved.
 function updateSavingsLedger(msg) {
   if (runStartTime === null) return;
-
   const currentStep = steps.length ? steps[steps.length - 1] : 0;
   const lost = rolledBackSteps(msg.detail);
-
-  // The preserved figure has to keep counting, not freeze at the instant of the
-  // rescue. A numerical failure is caught within seconds — at step 6 of 1950 in
-  // the default demo — so a snapshot taken here reads "<1m / $0.00" and shows a
-  // successful recovery as having saved nothing. What was actually preserved is
-  // every second the run goes on to spend *not* being restarted from step 0, and
-  // that accrues for the rest of the run.
-  //
-  // Basis is unchanged and still conservative: elapsed wall clock scaled by the
-  // fraction of steps that survived the rollback, so the discarded steps are
-  // never counted as saved.
-  preservedLostSteps = lost;
-  startPreservedMeter();
-  startSaved(lost);
-
   const failStep = failures.length ? failures[failures.length - 1].step : currentStep;
-  const lostNote = lost
-    ? ` The ${lost} rolled-back step${lost === 1 ? '' : 's'} ${lost === 1 ? 'is' : 'are'} excluded.`
-    : '';
-  document.getElementById('ledger-detail').innerHTML =
-    `Failure @ step ${failStep} &rarr; ${escapeText(msg.action)}: ${escapeText(msg.detail)}` +
-    `<br><span class="assumption">Training preserved by the recovery, priced at ` +
-    `$${gpuRate.toFixed(2)}/hr (${escapeText(gpuRateSource)}).${lostNote} ` +
-    `The comparison is against restarting this run from step 0.</span>`;
+  startSaved(lost,
+    `Failure @ step ${failStep} &rarr; ${escapeText(msg.action)}: ${escapeText(msg.detail)}`);
 }
 
 function escapeText(v) {
@@ -1465,16 +1465,21 @@ function addLogEntry(type, badge, message) {
 // ARC knows the run is dead and will not act -- showed nothing at all. This
 // counts the waste as it accrues, from the moment of detection, so the figure
 // the user is deciding against is on screen while the decision is theirs.
-let wasteSince = null;
-let wasteTimer = null;
 let runMeterTimer = null;
 
 // Compute accounting is on screen from the first step, not only after a
 // failure. The challenge asks the experience to show what it is saving; a panel
 // that stays hidden until something goes wrong shows nothing on the runs where
 // the user is deciding whether to keep paying.
+//
+// This is the ledger's only job now. It used to have two further modes — one
+// counting compute burned since a detection, one counting training preserved by
+// a rescue — and both restated two tiles the Resources Conserved panel below
+// already shows, in the same units, from the same variables. Two panels
+// disagreeing about which is authoritative is worse than one panel; the ledger
+// hands over the moment that panel appears.
 function renderRunMeter() {
-  if (wasteSince !== null || runStartTime === null) return;  // detection takes over
+  if (savedActive || runStartTime === null) return;  // Resources Conserved takes over
   const secs = (Date.now() - runStartTime) / 1000;
   document.getElementById('ledger-time').textContent =
     secs < 90 ? `${secs.toFixed(0)}s` : `${(secs / 60).toFixed(1)}m`;
@@ -1523,6 +1528,9 @@ let savedLostSteps = 0;
 let savedMode = 'preserved';
 let savedDetectStep = 0;
 let savedDetectTime = 0;
+// The one line the ledger's detail carried that this panel did not: which step
+// failed, and what (if anything) was done about it.
+let savedHeadline = '';
 
 // Bytes a coalesced telemetry stream did not send.
 //
@@ -1611,7 +1619,8 @@ function renderSaved() {
     fmtEnergy(hours * (gpuWatts / 1000));
   document.getElementById('saved-bandwidth').textContent = fmtBytes(bytesNotSent());
 
-  document.getElementById('saved-note').innerHTML = burned
+  const headline = savedHeadline ? `${savedHeadline}<br>` : '';
+  document.getElementById('saved-note').innerHTML = headline + (burned
     ? `ARC reported this failure and is deliberately not acting on it — no ` +
       `response has been shown to help. Everything above is compute spent after ` +
       `the diagnosis was already known. <strong>Stopping now saves the rest.</strong>` +
@@ -1625,27 +1634,37 @@ function renderSaved() {
     `hyperparameter instead, and reach a better model. What ARC buys is a run ` +
     `that survives when nobody is watching. Priced at $${gpuRate.toFixed(2)}/hr ` +
     `(${escapeText(gpuRateSource)}) and ${gpuWatts}W typical for this tier; ` +
-    `rolled-back steps excluded. ${telemetryBasis()}</span>`;
+    `rolled-back steps excluded. ${telemetryBasis()}</span>`);
 }
 
-function startSaved(lostSteps) {
-  savedMode = 'preserved';
-  savedLostSteps = lostSteps || 0;
-  savedActive = true;
+// This panel is the single authority on compute saved and compute spent, so it
+// takes the ledger's slot rather than sitting beneath a second copy of its
+// numbers.
+function handOverFromLedger() {
+  stopRunMeter();
+  document.getElementById('ledger-card').classList.remove('active');
   document.getElementById('saved-card').classList.add('active');
-  renderSaved();
   if (savedTimer === null) savedTimer = setInterval(renderSaved, 1000);
 }
 
-function startBurned(step) {
+function startSaved(lostSteps, headline) {
+  savedMode = 'preserved';
+  savedLostSteps = lostSteps || 0;
+  savedActive = true;
+  savedHeadline = headline || '';
+  handOverFromLedger();
+  renderSaved();
+}
+
+function startBurned(step, kind) {
   if (savedActive && savedMode === 'preserved') return;  // a rescue outranks this
   savedMode = 'burned';
   savedDetectStep = step || 0;
   savedDetectTime = Date.now();
   savedActive = true;
-  document.getElementById('saved-card').classList.add('active');
+  savedHeadline = `Failure detected @ step ${step} (${escapeText(shortKind(kind))}).`;
+  handOverFromLedger();
   renderSaved();
-  if (savedTimer === null) savedTimer = setInterval(renderSaved, 1000);
 }
 
 function stopSaved() {
@@ -1655,75 +1674,8 @@ function stopSaved() {
 function resetSaved() {
   stopSaved();
   savedActive = false; savedLostSteps = 0; savedMode = 'preserved';
-  savedDetectStep = 0; savedDetectTime = 0;
+  savedDetectStep = 0; savedDetectTime = 0; savedHeadline = '';
   document.getElementById('saved-card').classList.remove('active');
-}
-
-// ── Preserved-compute meter — live after a successful rescue ────────────────
-let preservedTimer = null;
-let preservedLostSteps = 0;
-
-function renderPreserved() {
-  if (runStartTime === null) return;
-  const currentStep = steps.length ? steps[steps.length - 1] : 0;
-  const surviving = currentStep > 0
-    ? Math.max(0, currentStep - preservedLostSteps) / currentStep
-    : 1;
-  const ms = (Date.now() - runStartTime) * surviving;
-  const secs = ms / 1000;
-  document.getElementById('ledger-time').textContent =
-    secs < 90 ? `${secs.toFixed(0)}s` : `${(secs / 60).toFixed(1)}m`;
-  document.getElementById('ledger-cost').textContent =
-    '$' + ((ms / 3600000) * gpuRate).toFixed(4);
-}
-
-function startPreservedMeter() {
-  stopRunMeter();
-  stopWasteCounter();
-  stopPreservedMeter();
-  document.getElementById('ledger-time-label').textContent = 'Training Preserved';
-  document.getElementById('ledger-cost-label').textContent = 'Compute Not Re-Spent';
-  document.getElementById('ledger-card').classList.add('active');
-  renderPreserved();
-  preservedTimer = setInterval(renderPreserved, 1000);
-}
-
-function stopPreservedMeter() {
-  if (preservedTimer !== null) { clearInterval(preservedTimer); preservedTimer = null; }
-}
-
-function stopWasteCounter() {
-  if (wasteTimer !== null) { clearInterval(wasteTimer); wasteTimer = null; }
-  wasteSince = null;
-}
-
-function renderWaste() {
-  if (wasteSince === null) return;
-  const secs = (Date.now() - wasteSince) / 1000;
-  const mins = secs / 60;
-  document.getElementById('ledger-time').textContent =
-    secs < 90 ? `${secs.toFixed(0)}s` : `${mins.toFixed(1)}m`;
-  document.getElementById('ledger-cost').textContent =
-    '$' + ((secs / 3600) * gpuRate).toFixed(4);
-}
-
-function startWasteCounter(step, kind, reportOnly) {
-  if (wasteSince !== null) return;   // first detection owns the counter
-  stopRunMeter();
-  wasteSince = Date.now();
-  document.getElementById('ledger-time-label').textContent = 'Burned Since Detection';
-  document.getElementById('ledger-cost-label').textContent = 'Cost Since Detection';
-  document.getElementById('ledger-detail').innerHTML =
-    `Failure detected @ step ${step} (${escapeText(shortKind(kind))}). ` +
-    (reportOnly
-      ? 'No intervention is known to help this failure, so training is continuing untouched. '
-      : '') +
-    `<br><span class="assumption">Compute spent since ARC knew, priced at ` +
-    `$${gpuRate.toFixed(2)}/hr (${escapeText(gpuRateSource)}). ` +
-    `Stopping now saves the remainder.</span>`;
-  document.getElementById('ledger-card').classList.add('active');
-  renderWaste();
-  wasteTimer = setInterval(renderWaste, 1000);
 }
 
 // Risk label -> color. Driven by the label the backend sent, not re-derived from
@@ -1767,13 +1719,8 @@ function handleMessage(msg) {
       // not a cosmetic one.
       window._arcNonfinite = {};
       metricEventsReceived = 0;
-      stopWasteCounter();
       stopRunMeter();
-      stopPreservedMeter();
       resetSaved();
-      preservedLostSteps = 0;
-      document.getElementById('ledger-time-label').textContent = 'Training Preserved';
-      document.getElementById('ledger-cost-label').textContent = 'Compute Not Re-Spent';
       document.getElementById('ledger-time').textContent = '0m';
       document.getElementById('ledger-cost').textContent = '$0.00';
       document.getElementById('ledger-detail').textContent = '—';
@@ -1999,11 +1946,10 @@ function handleMessage(msg) {
         document.getElementById('alert-overlay').classList.add('active');
       }
       failures.push({ step: msg.step, kind: msg.kind || 'numerical' });
-      startWasteCounter(msg.step, msg.kind || 'numerical', isReportOnly(msg.kind));
       if (!interventionExpected(msg.kind)) {
         // Nothing is coming to fix this, so what accrues from here is spend, not
         // progress. Same panel, inverted framing.
-        startBurned(msg.step);
+        startBurned(msg.step, msg.kind || 'numerical');
       }
       addLogEntry('failure', 'failure',
         `[Step ${msg.step}] ${shortKind(msg.kind)} — ${msg.reason || 'failure signature detected'}`);
@@ -2146,9 +2092,7 @@ function handleMessage(msg) {
       }
       // Whatever the outcome, the run is over -- the waste counter must not keep
       // accruing against a process that is no longer burning anything.
-      stopWasteCounter();
       stopRunMeter();
-      stopPreservedMeter();
       stopSaved();
       resetStopButtons();
       break;

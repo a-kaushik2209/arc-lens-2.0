@@ -16,7 +16,7 @@ Every year, billions of dollars in cloud compute are silently wasted because neu
 
 **ARC (Autonomous Recovery Controller)** is an open-source Python framework that wraps any PyTorch training loop with a real-time monitoring and self-healing engine. When a training run begins to fail, ARC detects it — often before the model visibly degrades — rolls back to the last healthy checkpoint, applies corrective measures, and resumes training automatically. No manual intervention. No wasted compute. No lost runs.
 
-In controlled experiments across 9 architectures ranging from 10M to 117M parameters, ARC achieved **100% recovery rate** with **zero false positives** and **less than 10% runtime overhead** for models above 250K parameters.
+In controlled experiments across 8 architectures ranging from 10M to 117M parameters, ARC achieved **100% recovery rate** with **zero false positives** and **less than 10% runtime overhead** for models above 250K parameters. Read that as what it is: a result on *programmatically injected* failures, on CPU, measured by us. It is not an audited benchmark, and "100% on injected failures" is a different claim from "100% on real runs at scale" — see §3 for the protocol and its limits.
 
 We are seeking **seed funding of $25,000–$75,000** to:
 
@@ -109,6 +109,24 @@ Unlike all existing tools, ARC operates **proactively and autonomously**:
 
 All results are reproducible via scripts committed to the public repository at `github.com/a-kaushik2209/ARC`.
 
+**What these numbers are, precisely.** Every figure in this section comes from a controlled
+protocol in which the failure is *injected* — a NaN written into the loss, a 50× learning-rate
+spike, a corrupted momentum buffer — on CPU, and measured by us. None of it is independently
+audited, none of it is on GPU clusters or distributed training, and none of it is on failures
+that arose on their own in someone's real run. The mechanism is demonstrable; the operating
+envelope is not yet established. `FUTURE_IMPROVEMENTS.md` §3.2 lists GPU and distributed
+validation as open work, and that is the honest status.
+
+Two limits worth stating here rather than leaving a reader to find them:
+
+- A 100% recovery rate is measured against the failure classes ARC *acts* on. In the shipping
+  ARC Lens harness only `numerical` failures trigger a recovery action; `loss_plateau` and
+  `representation_collapse` are detect-and-report only, because no tested action reliably
+  fixes them. A run that dies of those is reported, not rescued.
+- "Zero false positives" is a count over this protocol's 25 scenarios per method, not a
+  false-positive *rate* with a confidence interval. 0/25 is consistent with any true rate
+  below roughly 11%.
+
 ### 3.1 Recovery Rate
 
 **Protocol:** 4 methods × 5 failure types × 5 random seeds = 25 scenarios per method.
@@ -143,11 +161,19 @@ Overhead decreases with model scale because forward/backward computation grows s
 | Medium CNN | 288K | 1.38 ms | **~10%** |
 | Large CNN | 2.5M | 7.04 ms | **~9.5%** |
 
-> At production-scale models (250K+ parameters), ARC adds less than 10% overhead — a small price for 100% training resilience.
+> At production-scale models (250K+ parameters), ARC adds less than 10% overhead.
+
+The table above is CPU wall-clock. The number that actually matters is on GPU, where the
+harness competes with the device for sync points rather than for cores, and it has since been
+measured directly: **1.8%** for core metrics and **8.4%** with structural diagnostics enabled,
+on an RTX 3050 with a 2.79M-parameter CNN over 200 steps at batch 128, median of 3 runs.
+Reproduce with `python python/benchmark_overhead.py`; raw output in `docs/benchmark_overhead.json`.
+Sampling the structural signals every step instead of every 25 costs 170%, which is why the
+default is 25.
 
 ### 3.4 Large-Scale Stress Tests
 
-ARC was validated across 9 architectures at 10M–117M parameters with programmatically injected failure scenarios:
+ARC was validated across 8 architectures at 10M–117M parameters with programmatically injected failure scenarios:
 
 | Model | Parameters | Failure Type | Recovery |
 | :--- | :---: | :--- | :---: |
@@ -160,7 +186,9 @@ ARC was validated across 9 architectures at 10M–117M parameters with programma
 | ViT-Base | 86M | Inf Nuke | ✓ |
 | GPT-2 Medium | 117M | NaN Bomb | ✓ |
 
-**Result: 100% recovery across all architectures and all failure types.**
+**Result: 8 of 8 architectures recovered, across the injected failure types listed above.**
+One run per cell — this is an existence proof that the mechanism holds at 117M parameters,
+not a rate with error bars.
 
 ---
 
@@ -241,9 +269,12 @@ We are seeking **seed funding of $25,000–$75,000** allocated as follows:
 
 ### Why Now?
 
-- The core algorithm is **proven**: 100% recovery, 97.5% prediction accuracy, validated at 117M parameters.
+- The core algorithm **works on the failures it was built for**: 100% recovery and 97.5%
+  prediction accuracy against injected failures, demonstrated up to 117M parameters. On CPU,
+  on our own protocol — see §3 for exactly what that does and does not establish.
 - The open-source community is **live**: Discord server active, PyPI package published.
-- The IDE layer is **shipped**: ARC Lens v0.1.0 is packaged and ready for Marketplace submission.
+- The IDE layer is **shipped**: ARC Lens is packaged and installable, with a measured GPU
+  overhead of 1.8%/8.4% and a reproducible recovery demo.
 - The only barrier to scale is **hardware**: GPU validation is the single remaining gate to enterprise credibility.
 
 ---
@@ -273,7 +304,7 @@ Built ARC Lens end-to-end: VS Code extension architecture, real-time telemetry d
 ## 9. Current Traction
 
 - `arc-training` published and available on PyPI
-- ARC Lens v0.1.0 `.vsix` packaged and ready for marketplace submission
+- ARC Lens `.vsix` packaged and installable; current build 0.3.8
 - Active Discord community established
 - AGPL-3.0 open-source license for maximum adoption and attribution
 - All benchmark results reproducible via public experiment scripts

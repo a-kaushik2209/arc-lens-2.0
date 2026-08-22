@@ -159,7 +159,7 @@ also why structural checks now wait 200 steps before capturing any baseline at a
 
 ## Claims & benchmarks
 
-**Q6. Your funding proposal says 100% recovery rate, zero false positives, across 9 architectures. Can I trust that?**
+**Q6. Your funding proposal says 100% recovery rate, zero false positives, across 8 architectures. Can I trust that?**
 That's an internal result from a controlled, synthetic-failure protocol (programmatically
 injected NaN/Inf/LR-spike failures on CPU), not an independently audited benchmark and not yet
 validated on GPU or on organic (naturally-occurring) failures. We're confident in the mechanism
