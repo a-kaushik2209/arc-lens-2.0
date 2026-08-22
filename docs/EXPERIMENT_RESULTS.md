@@ -440,8 +440,15 @@ them, and the pattern across all four is the actual result:
 > assumes the run needs to be slowed down or moved back. A run stuck at chance needs neither.
 > It needs large steps to escape, which is exactly what both responses remove.
 
-What still intervenes is a non-finite or exploded loss and a gradient norm above 50 — both
-verified working, both reading the loss and gradient directly rather than a structural proxy.
+What still intervenes is a non-finite or exploded loss. That is the whole entry point, and it
+is narrower than it looks: the gradient-norm test that latches clipping lives *inside* the
+recovery agent, which is only ever reached with `kind="numerical"`. A run whose gradients spike
+while its loss stays finite is measured, charted and risk-scored, and never clipped — verified
+by running one: a sustained gradient norm of 1128.89, 22× the threshold, produced zero failures
+and zero interventions. Whether gradient explosion should get its own entry point is an open
+design question in [`FUTURE_IMPROVEMENTS.md`](FUTURE_IMPROVEMENTS.md), deliberately not resolved
+by just wiring it up, because that would be letting a signal act without the A/B evidence the
+four structural rules were held to.
 
 **One caveat on the `lr=0.25` pair, stated because it cuts against the table.** In the previous
 sweep that configuration finished at 86.83% / 87.75%; here both arms collapsed to chance. Same

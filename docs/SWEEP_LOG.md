@@ -156,7 +156,9 @@ never caught up.
 Raw results: [`experiment_ab_sweep5_rank_rule.json`](experiment_ab_sweep5_rank_rule.json).
 
 **Outcome:** `representation_collapse` is report-only too. No structural rule is allowed to act
-any more. What still intervenes is a non-finite or exploded loss and a gradient norm above 50.
+any more. What still intervenes is a non-finite or exploded loss — and only that: the
+gradient-norm test that latches clipping sits inside the recovery agent, which is reached only
+with `kind="numerical"`, so a gradient spike on a finite loss never triggers anything.
 
 **Also worth recording, because it cuts against the table:** `lr=0.25` finished at 86.83% /
 87.75% in sweep 3 and collapsed to chance in both arms here — same seed, same data order. That

@@ -183,6 +183,27 @@ test("failure kinds and actions get readable chart labels", () => {
   assert.equal(h.shortAction("reduce_lr"), "LR down");
 });
 
+test("the dashboard's report-only set matches the harness exactly", () => {
+  // Not a restatement of the test below — that one pins the labels, this one
+  // pins the two files together. They drifted: `representation_collapse` was
+  // made report-only in _arc_bootstrap.py and the dashboard kept promising
+  // "Attempting rollback / learning-rate reduction" for it, an intervention
+  // that was never coming. Read the Python set rather than hard-coding it, so
+  // the next kind added on one side fails here instead of shipping.
+  const py = fs.readFileSync(path.join(__dirname, "..", "python", "_arc_bootstrap.py"), "utf8");
+  const m = py.match(/REPORT_ONLY_KINDS = frozenset\(\{([^}]*)\}\)/);
+  assert.ok(m, "could not find REPORT_ONLY_KINDS in _arc_bootstrap.py");
+  const pyKinds = [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]).sort();
+
+  const html = fs.readFileSync(path.join(__dirname, "..", "media", "dashboard.html"), "utf8");
+  const j = html.match(/const REPORT_ONLY_KINDS = new Set\(\[([^\]]*)\]\)/);
+  assert.ok(j, "could not find REPORT_ONLY_KINDS in dashboard.html");
+  const jsKinds = [...j[1].matchAll(/'([^']+)'/g)].map((x) => x[1]).sort();
+
+  assert.deepEqual(jsKinds, pyKinds,
+    `dashboard report-only kinds ${JSON.stringify(jsKinds)} != harness ${JSON.stringify(pyKinds)}`);
+});
+
 test("the report-only kinds match the harness", () => {
   // Mirrors REPORT_ONLY_KINDS in python/_arc_bootstrap.py. A report-only kind
   // emits failure_detected with no intervention event ever following, so the
@@ -191,8 +212,11 @@ test("the report-only kinds match the harness", () => {
   // sit on screen unfulfilled for the rest of the demo.
   const h = loadHelpers();
   assert.equal(h.isReportOnly("loss_plateau"), true);
+  // Was `false` when only the plateau rule was report-only. The rank rule was
+  // demoted too after its own A/B, and this assertion is the reason the change
+  // could not land on the Python side alone without something failing.
+  assert.equal(h.isReportOnly("representation_collapse"), true);
   assert.equal(h.isReportOnly("numerical"), false);
-  assert.equal(h.isReportOnly("representation_collapse"), false);
   assert.equal(h.isReportOnly(undefined), false);
 });
 

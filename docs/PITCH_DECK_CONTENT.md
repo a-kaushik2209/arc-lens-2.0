@@ -9,10 +9,11 @@ such — say it that way out loud too, a judge who catches an oversold claim wil
 
 ## Elevator Pitch (one sentence)
 
-> ARC Lens is a VS Code extension that watches your PyTorch training run in real time and,
-> the moment it starts to fail — NaN loss, exploding gradients, silent representation
-> collapse — automatically rolls the model back to its last healthy checkpoint and lowers the
-> learning rate, so the run keeps going without you ever touching a restart button.
+> ARC Lens is a VS Code extension that watches your PyTorch training run in real time and, the
+> moment the loss goes non-finite or explodes, automatically rolls the model back to its last
+> healthy checkpoint and lowers the learning rate, so the run keeps going without you ever
+> touching a restart button — and for the failures it can detect but not safely fix, like a
+> silent representation collapse, it says so instead of guessing.
 
 ---
 
@@ -64,12 +65,14 @@ A real-time PyTorch monitor and autonomous recovery system, built into VS Code.
 - Hooks into any PyTorch training loop with zero/minimal code changes.
 - Streams live telemetry to a VS Code dashboard: loss, learning rate, gradient norm, GPU
   memory, plus deeper signals — effective rank, gradient entropy, weight update ratio,
-  gradient flow ratio. Of those four, only effective rank is wired to an intervention; the other
-  three are charted for the user to read. Two of them used to trigger and were deleted after
-  measurement showed they fired on healthy runs.
-- The moment a run crosses a failure threshold (NaN/Inf loss, gradient explosion,
-  representation collapse), a local recovery agent **rolls back to the last healthy
-  checkpoint and reduces the learning rate** — no restart, no manual intervention.
+  gradient flow ratio. **None of the four is wired to an intervention any more.** Two used to
+  trigger and were deleted after measurement showed them firing on healthy runs; the remaining
+  two — the loss plateau and effective rank — detect and report but no longer act, after
+  measurement showed failing runs ending worse with their responses applied.
+- The moment a run's loss goes non-finite or past 1e6, a local recovery agent **rolls back to
+  the last healthy checkpoint and reduces the learning rate** — no restart, no manual
+  intervention. That is the one entry point, and saying so is the honest version: a structural
+  signal can raise a report, but only the loss can trigger an action.
 - Training resumes automatically, in the same process, in under a second.
 
 ---
@@ -83,10 +86,11 @@ A real-time PyTorch monitor and autonomous recovery system, built into VS Code.
 2. **Telemetry Engine** — hooks `Optimizer.step`, so it measures once per *weight update*.
    Computes gradient norm / learning rate / GPU memory, plus the structural signals from
    `arc-training` (PyPI), and streams it all out as JSON.
-3. **Local Recovery Agent** — a rule-based loop that watches those signals. When a threshold
-   trips it restores the last healthy checkpoint, scales down the learning rate, or turns on
-   gradient clipping, live, on the running process — and if three attempts don't work it says
-   the run is unrecoverable instead of retrying forever.
+3. **Local Recovery Agent** — a rule-based loop. When the loss goes non-finite or past 1e6 it
+   restores the last healthy checkpoint, scales down the learning rate, and turns on gradient
+   clipping, live, on the running process — and if three attempts don't work it says the run is
+   unrecoverable instead of retrying forever. The structural signals feed reports, not actions;
+   that is a measured decision, not an omission.
 
 **Suggested diagram (simple, drawable by hand or in slides):**
 
@@ -96,7 +100,7 @@ A real-time PyTorch monitor and autonomous recovery system, built into VS Code.
         ▼
  [Telemetry Engine]───────────► streams metrics ───────►[VS Code Dashboard]
         │
-        │  loss NaN or exploded? grad norm > 50? effective rank collapsed?
+        │  loss NaN or exploded?          (structural signals report only)
         ▼
  [Recovery Agent] ──rolls back weights, cuts LR, clips grads──► [training resumes]
 ```
@@ -124,11 +128,12 @@ What to show, in order:
    same run, no restart.
 5. Be precise about which failure you got. A `numerical` failure gets a rollback and the loss
    curve resumes. A `loss_plateau` ("stalled") gets **no action at all** — it is report-only,
-   and that is a deliberate result, not a gap. It used to cut the learning rate; the A/B
-   measured that doing so took a run which recovered to 73.19% on its own down to 10.00%.
-   The honest line is "we detected a death that every loss-curve tool would have shown as a
-   flat green line, and we measured that intervening made it worse, so we don't" — not
-   "we saved it".
+   and that is a deliberate result, not a gap. It used to cut the learning rate; in the A/B the
+   arm that did so finished at 10.00% against a control that recovered to 73.19% — and a later
+   sweep split that same configuration by 62 points with *nothing* intervening, so we do not
+   claim the cut caused it. The honest line is "we detected a death that every loss-curve tool
+   would have shown as a flat green line, and we have no evidence any response we can make
+   helps, so we report it instead of guessing" — not "we saved it".
 
 **Presenter note:** the recovery trace is a deterministic rule engine, not a live LLM call —
 it's fast and 100% reproducible on stage, which is a feature for a demo, not a limitation to

@@ -8,7 +8,7 @@ of a judge.
 extension that monkey-patches `Optimizer.step` in the user's process, streams loss /
 gradient norm / LR / GPU memory / effective rank / gradient entropy / weight-update-ratio to an
 in-editor webview dashboard over stdout JSON, and — on a **deterministic threshold rule**
-(NaN/Inf loss or `|loss| > 1e6`, grad norm > 50) — rolls the live model back to the last
+(NaN/Inf loss or `|loss| > 1e6`) — rolls the live model back to the last
 checkpoint held in memory and cuts the optimizer's LR, in-process, without the user restarting
 the script. No *structural* rule is allowed to act any more: the entropy and update-ratio rules
 were deleted, and the plateau and effective-rank rules were demoted to report-only after their

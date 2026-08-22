@@ -904,7 +904,7 @@ function shortKind(kind) { return KIND_LABELS[kind] || kind || 'failure'; }
 // Kinds ARC reports without acting on. Mirrors REPORT_ONLY_KINDS in
 // _arc_bootstrap.py: no intervention event will follow one of these, so the
 // status strip must not promise a recovery that is never coming.
-const REPORT_ONLY_KINDS = new Set(['loss_plateau']);
+const REPORT_ONLY_KINDS = new Set(['loss_plateau', 'representation_collapse']);
 function isReportOnly(kind) { return REPORT_ONLY_KINDS.has(kind); }
 function shortAction(action) {
   if (action === 'rollback_and_reduce_lr') return 'rollback + LR';
