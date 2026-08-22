@@ -27,7 +27,7 @@ Do this at least 30 minutes before your slot, not 2 minutes before.
 2. **Install the Python side into the interpreter VS Code has selected**
    ```bash
    pip install torch arc-training torchvision
-   python tests/test_harness.py    # 67 tests, ~23s
+   python tests/test_harness.py    # 69 tests, ~23s
    ```
    Both suites green means the harness, the detector, checkpointing and the end-to-end path
    all work on this machine. This is the single best use of five minutes before a demo.

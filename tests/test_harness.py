@@ -65,6 +65,41 @@ class TestRiskHeuristic(unittest.TestCase):
                 self.assertEqual(label, expected, f"grad={grad} bad={bad} score={score}")
 
 
+class TestShippedDataFiles(unittest.TestCase):
+    """The committed JSON is evidence, so it has to actually parse.
+
+    These files exist so a reader can check the numbers in the docs against the
+    raw output. That only works if `json.load(open(path))` — what a reader or a
+    script will actually type — succeeds. A UTF-8 BOM makes it raise
+    JSONDecodeError even though the content is perfectly valid, which is how
+    experiment_ab_sweep5_rank_rule.json shipped: unreadable by the one method
+    anyone would use to verify it.
+
+    This repo has form on encoding (a double-encoded UTF-8 regression in
+    dashboard.html), so it is worth a standing check rather than a one-off fix.
+    """
+
+    def test_every_committed_json_loads_with_a_plain_open(self):
+        docs = REPO / "docs"
+        files = sorted(docs.glob("*.json"))
+        self.assertTrue(files, "no JSON found under docs/ — has the layout moved?")
+        for path in files:
+            with self.subTest(path=path.name):
+                with open(path) as fh:          # deliberately no encoding= override
+                    try:
+                        json.load(fh)
+                    except json.JSONDecodeError as exc:
+                        self.fail(f"{path.name} does not parse with a plain open(): {exc}")
+
+    def test_no_committed_json_starts_with_a_byte_order_mark(self):
+        for path in sorted((REPO / "docs").glob("*.json")):
+            with self.subTest(path=path.name):
+                self.assertFalse(
+                    path.read_bytes().startswith(b"\xef\xbb\xbf"),
+                    f"{path.name} begins with a UTF-8 BOM",
+                )
+
+
 class TestFiniteGuard(unittest.TestCase):
     """JSON cannot represent NaN or Infinity, and absent beats invented."""
 
