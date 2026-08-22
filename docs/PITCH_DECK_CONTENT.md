@@ -211,14 +211,24 @@ subscription, with zero token-cost liability as usage scales.
 
 **Headline:** What ships next — turning the claim into proof.
 
-- **Compute-savings ledger** — every time ARC recovers a run, show the number a non-ML judge
-  understands instantly: *"4h 12m of training preserved · $12.60 of A100 time not re-spent."*
-- **Side-by-side A/B comparison** — run the same script twice, identically seeded, once with
-  recovery on and once off, and plot both curves. This turns "ARC recovers your training run"
-  from a claim into something a skeptic can watch happen with their own eyes.
-- **Intervention markers on the charts** — annotate the exact step where a failure was
-  detected and where recovery kicked in, directly on the loss curve, so the before/after is
-  visible at a glance with no narration needed.
+*Two items previously on this slide have shipped and moved to the demo: the compute-savings
+ledger is now the live **Resources Conserved** panel, and intervention markers are annotated on
+the loss, gradient-norm and effective-rank charts (`markLine` / `markArea`). Do not present
+shipped work as roadmap — a judge who has seen the demo will catch it.*
+
+- **Error bars on the rescue claim.** The +36.6-point result (10.00% → 46.59%) is a single
+  seeded pair. `python/repeatability.py --repeats N` turns it into a distribution. Sweep 6 is
+  exactly why this matters: at lr=0.5 the run-to-run spread swamped effects of this size. Until
+  this runs, the claim is stated with its caveat attached.
+- **Side-by-side A/B in the UI.** `Run Baseline (interventions off)` already produces the control
+  arm, but the two runs are compared by reading two dashboards. Overlaying both curves in one
+  chart turns the strongest evidence we have into something a skeptic watches happen live.
+- **Distributed training (DDP/FSDP).** Rank-aware emission, `all_reduce` for global gradient
+  norms, and a barrier so every rank rolls back to the same checkpoint. Untested — it needs
+  multi-GPU hardware we don't have. This is where the expensive failures actually live, so it
+  doubles as the honest answer to "does this scale?"
+- **Manual screen-reader pass (NVDA / Orca).** Lighthouse is at 100, but automated checks confirm
+  the ARIA live region *exists*, not that what it announces is useful in sequence.
 
 ---
 
