@@ -141,6 +141,67 @@ its behaviour under sustained elevated risk is untested.
 
 ---
 
+## 3b. The A/B that shows compute actually preserved
+
+Sections 2 and 3 measure waste *avoided*. This one measures a run *saved* — the
+only path where ARC acts, exercised end to end. Default settings of
+`train_demo.py` as of this commit (`lr=5.0`, warmup 5, 5 epochs), both arms same
+seed and same data order, 1,950 steps each. Measured 2026-08-22:
+
+| | `baseline` (control) | `active` |
+|:---|---:|---:|
+| First failure | `numerical` @ step 6, 4.19 s | `numerical` @ step 6, 4.35 s |
+| Interventions applied | **0** | **2** — `rollback_and_reduce_lr`, `enable_grad_clipping` |
+| Epoch 1 train loss | 2.52e+12 | 4.22e+05 |
+| Final val accuracy | **10.00 %** — chance | **46.59 %** |
+| Wall clock | 85.27 s | 113.49 s |
+
+Per-epoch validation accuracy:
+
+| epoch | baseline | active |
+|---:|---:|---:|
+| 1 | 10.00 % | 10.00 % |
+| 2 | 10.00 % | 10.00 % |
+| 3 | 10.00 % | **18.28 %** |
+| 4 | 10.00 % | **32.09 %** |
+| 5 | 10.00 % | **46.59 %** |
+
+The loss goes non-finite at step 6 in both arms — 2.5 × 10¹² by the end of the
+first epoch in the control. The control never comes back: five epochs, 85
+seconds, and a model at random-guess accuracy. **Every second of that run is
+waste**, and the user's next move is to restart it from step 0.
+
+The intervened arm rolls back to the last healthy checkpoint at step 6, cuts the
+learning rate, latches gradient clipping on, and climbs out — 46.59 % by epoch 5
+and still rising when the schedule ends. **+36.59 points against an identically
+seeded control**, and the compute that produced it was not re-spent.
+
+**The honest accounting.** The active arm is 28.2 s slower (113.49 vs 85.27,
++33 %), because recovering a run costs more than letting a dead one coast: the
+clipping is real work and the rolled-back steps are re-run. That is the right
+comparison to make out loud — ARC did not make this run cheaper, it made
+85 wasted seconds into 113 productive ones. The alternative was not "a faster
+good run", it was "restart from scratch and hope".
+
+**Caveats, both real.** This is a single seeded pair, and
+[`SWEEP_LOG.md`](SWEEP_LOG.md) sweep 6 is the reason that matters: at `lr=0.5`
+run-to-run spread swamped effects of this size. This case is more defensible
+than that one — the failure is a deterministic numerical explosion at step 6
+rather than the bistable escape-or-not regime — but a distribution over repeated
+runs (`python/repeatability.py`) has not been measured and no error bar is
+claimed. And 46.59 % is not a good CIFAR-10 result; it is a rescued run, not a
+tuned one. The claim is that the compute was preserved, not that the
+hyperparameters were fixed.
+
+**Reproduce it:**
+
+```bash
+ARC_MODE=baseline python python/runner.py python/train_demo.py   # ends at 10.00 %
+ARC_MODE=active   python python/runner.py python/train_demo.py   # ends at ~46 %
+```
+
+---
+
 ## 3a. The demo run — a silent death, caught, and 82 % still burned
 
 The single most demonstrable run in this project. Real CIFAR-10, real CNN,

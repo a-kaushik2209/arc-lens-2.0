@@ -13,6 +13,20 @@ which step — depends on the data order and the initialisation, so it is genuin
 not known in advance. That is the point: ARC has to *detect* the failure rather
 than be told where it is.
 
+**What a default run shows.** Both of ARC's failure kinds, in one run:
+
+  * a **numerical** failure — the loss goes non-finite early, and ARC rolls back
+    to the last healthy checkpoint, cuts the learning rate and latches gradient
+    clipping on. The run then climbs back off chance accuracy. This is the only
+    path where ARC acts, and it is what the dashboard's "Training Preserved"
+    figure is measuring.
+  * a **loss plateau** — reported, never acted on. Every response tried made a
+    recoverable run worse, so ARC states the diagnosis and leaves the run alone.
+
+The second is the more honest half of the demo, and the more useful one to talk
+about: ARC is worth something precisely because it distinguishes the failure it
+can fix from the one it cannot.
+
 Run it two ways to see what ARC is worth:
 
     ARC_MODE=baseline   interventions suppressed, telemetry only
@@ -41,11 +55,26 @@ torch.cuda.manual_seed_all(SEED)
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 EPOCHS = int(os.environ.get("ARC_DEMO_EPOCHS", "6"))
 BATCH_SIZE = int(os.environ.get("ARC_DEMO_BATCH", "128"))
-# 0.5 with SGD+momentum on a 9-layer CNN is past the edge of stability for this
-# architecture. It is not an absurd number — it is the kind of value copied from
-# a paper that used a different model, a different batch size and warmup.
-PEAK_LR = float(os.environ.get("ARC_DEMO_LR", "0.5"))
-WARMUP_STEPS = int(os.environ.get("ARC_DEMO_WARMUP", "60"))
+# 5.0 with SGD+momentum on a 9-layer CNN drives the loss non-finite within the
+# first epoch. It is not an absurd number in the way it looks: it is what you get
+# copying a learning rate from a paper that used a different model and a much
+# larger batch, then keeping your own warmup.
+#
+# The default was 0.5, and 0.5 is *worse for a demo* even though it also fails.
+# BatchNorm renormalises every block, so at 0.5 the network does not explode — it
+# saturates into a flat run at chance accuracy. ARC detects that (loss_plateau)
+# and deliberately does not act on it, because no response to a plateau has
+# survived measurement. Correct behaviour, but it means the one intervention path
+# that actually rescues a run is never exercised: a viewer sees detection and
+# never sees recovery.
+#
+# At 5.0 the loss goes non-finite, which is the failure ARC does act on — rollback
+# to the last healthy checkpoint, learning rate cut, gradient clipping latched on
+# — and the run then climbs back off chance. Measured across the sweep in
+# docs/WASTE_REDUCTION.md. Both failure kinds show up in a single run, which is
+# what makes it the right default for a demonstration.
+PEAK_LR = float(os.environ.get("ARC_DEMO_LR", "5.0"))
+WARMUP_STEPS = int(os.environ.get("ARC_DEMO_WARMUP", "5"))
 DATA_ROOT = data_cache.cifar_root()
 
 

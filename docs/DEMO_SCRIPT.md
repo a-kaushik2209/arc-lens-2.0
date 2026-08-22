@@ -86,9 +86,9 @@ Show `python/train_demo.py` and scroll to the training loop.
 
 Scroll to the hyperparameters.
 
-> "The only unusual thing is the learning rate — 0.5 with SGD momentum on a 9-layer CNN, with
-> a very short warmup and no gradient clipping. That's past the edge of stability. Whether it
-> diverges and when depends on the data order and the initialisation."
+> "The only unusual thing is the learning rate — 5.0 with SGD momentum on a 9-layer CNN, with
+> a very short warmup and no gradient clipping. That's well past the edge of stability. Whether
+> it diverges and when depends on the data order and the initialisation."
 
 ### 3.2 Run it
 
@@ -128,9 +128,16 @@ there is no rollback or LR change to read out. Do not promise one and then have 
 contradict you on screen; the reason it takes no action is the strongest part of the story
 (see §3.3 below).
 
-**Expect `numerical` or `loss_plateau`.** Those are the two kinds this demo produces and the
-only two verified working. At `ARC_DEMO_LR=0.5` the run dies silently rather than exploding, and
-the marker you get is `loss_plateau` ("stalled" on the chart) at around step 316–330.
+**Expect `numerical` first, then `loss_plateau`.** At the default `ARC_DEMO_LR=5.0` a default
+run produces both, which is the point of that default: the loss goes non-finite around step 6,
+ARC rolls back, cuts the learning rate and latches gradient clipping on — the only path where it
+acts — and the run then climbs off chance accuracy to roughly 46 % by epoch 5 against a control
+arm stuck at 10.00 %. Later in the same run a `loss_plateau` fires and ARC deliberately does
+*not* act on it. Show both; the second is the more convincing half.
+
+At `ARC_DEMO_LR=0.5` (the previous default) the run dies silently rather than exploding and you
+only get `loss_plateau` at around step 316–330 — correct behaviour, but the rescue path is never
+exercised and a viewer never sees a recovery.
 `gradient_entropy_collapse` no longer exists — deleted after it took a healthy CIFAR-10 run from
 87.43% to chance — so do not build the talk track around it. `representation_collapse` still
 exists, fires rarely, and no longer acts. Do not promise it as a rescue.
