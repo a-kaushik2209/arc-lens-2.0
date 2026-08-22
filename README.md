@@ -26,17 +26,31 @@ unrecoverable and says so, instead of rolling back forever — because at that p
 answer is "kill this run", not a fourth rollback.
 
 **It is measured against a control arm, and the measurements have repeatedly gone against it.**
-Three structural detection rules were built, and two were deleted after an A/B showed each one
-intervening on healthy runs: one cost 1.74 and 0.78 points of validation accuracy, the other
-took a run from 87.4% to chance. Both were removed rather than retuned, because the underlying
-statistics do not separate a healthy run from a failing one on real workloads — see
+Four structural detection rules have been built and two were deleted after an A/B showed each
+one intervening on healthy runs: one cost 1.74 and 0.78 points of validation accuracy, the
+other took a run from 87.4% to chance. Both were removed rather than retuned, because the
+underlying statistics do not separate a healthy run from a failing one on real workloads — see
 [`docs/EXPERIMENT_RESULTS.md`](docs/EXPERIMENT_RESULTS.md).
 
+The fourth was added the same way it would have been deleted: by measurement. A real CIFAR-10
+run at lr=0.5 finished at 10.00% — chance — with its loss pinned at ln(10), and ARC reported
+**zero failures across all 780 steps**. No NaN, no gradient spike, no rank collapse; every rule
+was silent while the dashboard stayed green. That is the failure this tool exists to catch, and
+it did not. The fix is a loss-plateau rule, and it earns its place on the same evidence
+standard the deleted rules failed: replaying both arms, a healthy run's longest stall is 82
+steps against the dead run's 764 — a 9.3x separation, where effective rank offered 1.1x and
+gradient entropy offered none.
+
 What survives is deliberately narrow: divergence that is unambiguous (non-finite or exploded
-loss), gradient explosion, and a representation-collapse rule whose threshold is conservative
-enough that it has never fired in validation. The structural signals are still collected and
-charted — they are informative to a human reading a run — they just no longer get to act on
-their own.
+loss), gradient explosion, a loss plateau sustained past 300 steps, and a representation-collapse
+rule whose threshold is conservative enough that it has never fired in validation. The other
+structural signals are still collected and charted — they are informative to a human reading a
+run — they just no longer get to act on their own.
+
+**Detection is not the same as rescue, and the plateau rule is honest about it.** Confirming a
+stall takes 300 steps, by which point every checkpoint in the ring predates nothing useful. ARC
+reports the death and lowers the learning rate; it does not resurrect the run. Reporting a
+silent failure instead of showing a green dashboard for 780 steps is the claim — not recovery.
 
 ---
 
@@ -111,7 +125,13 @@ flow ratio (early vs late layer gradients; needs ≥4 parameterised layers).
 | Action | Trigger |
 | :--- | :--- |
 | `rollback_and_reduce_lr` | Loss non-finite or exploded past 1e6, or a confirmed representation collapse |
+| `reduce_lr` | Loss has not beaten its best value for 300 consecutive steps |
 | `enable_grad_clipping` | Gradient norm above 50 — applied by ARC, not just recommended |
+
+A plateau deliberately does **not** roll back. By the time 300 stalled steps have confirmed it,
+every checkpoint still in the ring is post-collapse — restoring one returns the model to the
+state it is already in, burns the ring, and spends a recovery attempt. Cutting the learning
+rate is the only move that can change the trajectory, so it is the only move taken.
 
 **Two rules were removed after measurement, and neither is coming back without new evidence.**
 
@@ -186,7 +206,7 @@ npm test                       # TypeScript + dashboard suites
 python tests/test_harness.py   # harness, detector, checkpointing, end-to-end
 ```
 
-93 tests — 45 TypeScript/dashboard, 48 Python. The Python suite includes six end-to-end tests
+95 tests — 45 TypeScript/dashboard, 50 Python. The Python suite includes six end-to-end tests
 that run the real harness against real training loops, asserting that gradient accumulation does
 not inflate the step count, that an LR intervention survives a scheduler rewriting the learning
 rate every step, that baseline mode never intervenes, and that tracebacks point at the user's

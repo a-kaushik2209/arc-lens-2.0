@@ -55,7 +55,23 @@ LOSS_EXPLOSION = 1e6
 # slowly. It has never fired in validation — the threshold sits at 50% of
 # baseline while a healthy run bottoms at 96% and a damaged one at 83% — so it
 # is conservative, and correspondingly unexercised.
+#
+# `loss_plateau` deliberately does *not* roll back, and that is the whole point
+# of separating it from the kinds above. A plateau is only confirmed after 300
+# steps of no improvement, by which time every checkpoint still in the ring
+# predates nothing useful — they are all post-collapse. Restoring one returns
+# the model to the same dead state it is already in, burns the ring, and counts
+# as a recovery attempt. Cutting the learning rate is the only move that can
+# change the trajectory, so it is the only move taken.
 STRUCTURAL_RESPONSES = {
+    "loss_plateau": (
+        "Training has stopped making progress while the loss stays finite — the "
+        "signature of a run that is alive on paper and dead in practice. No NaN, no "
+        "gradient spike, nothing the numerical guards can see. Reducing the learning "
+        "rate without rolling back, because every retained checkpoint is already past "
+        "the point where progress stopped.",
+        "reduce_lr",
+    ),
     "representation_collapse": (
         "The layers are collapsing onto a low-dimensional subspace, so the model is "
         "losing capacity it will not recover on its own. This produces no NaN and no "

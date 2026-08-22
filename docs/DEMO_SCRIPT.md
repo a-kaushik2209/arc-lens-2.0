@@ -27,7 +27,7 @@ Do this at least 30 minutes before your slot, not 2 minutes before.
 2. **Install the Python side into the interpreter VS Code has selected**
    ```bash
    pip install torch arc-training torchvision
-   python tests/test_harness.py    # 29 tests, ~35s
+   python tests/test_harness.py    # 50 tests, ~45s
    ```
    Both suites green means the harness, the detector, checkpointing and the end-to-end path
    all work on this machine. This is the single best use of five minutes before a demo.
@@ -107,7 +107,9 @@ Point at the four charts while it runs.
 > them used to trigger and we deleted both after measuring what they did to healthy runs."
 
 Do not claim the four signals catch failures a loss curve cannot show. One of them is wired to a
-trigger, and that trigger has never fired in validation. If a judge pushes, the answer is Q5 in
+trigger, and that trigger has never fired in validation — a dead run only loses 12.6% of its
+rank, so it cannot reach a 50% threshold. The silent failure we *do* catch is a loss plateau,
+and that is read off the loss itself, not off these four. If a judge pushes, the answer is Q5 in
 `FAQ_JUDGES.md`, and it is a better story than the claim it replaced.
 
 ### 3.3 The failure
@@ -118,20 +120,32 @@ paraphrase.
 
 > "It rolled back N steps and cut the learning rate from X to Y."
 
-**Expect `numerical`.** That is the failure kind this demo produces, and it is the only one
-verified working. `gradient_entropy_collapse` no longer exists — it was deleted after it took a
-healthy CIFAR-10 run from 87.43% to chance accuracy — so do not build the talk track around it.
-`representation_collapse` still exists but has never fired in validation, so do not promise it
-either.
+**Expect `numerical` or `loss_plateau`.** Those are the two kinds this demo produces and the
+only two verified working. At `ARC_DEMO_LR=0.5` the run dies silently rather than exploding, and
+the marker you get is `loss_plateau` ("stalled" on the chart) at around step 316–330.
+`gradient_entropy_collapse` no longer exists — deleted after it took a healthy CIFAR-10 run from
+87.43% to chance — so do not build the talk track around it. `representation_collapse` still
+exists but has never fired in validation, so do not promise it either.
+
+**If you demo the plateau, say what it does and does not do.** It reports the death; it does not
+reverse it. The run still finishes at 10.00%. Claiming a rescue here is the one thing that will
+get caught, because the accuracy is on screen.
 
 If a judge asks whether ARC catches failures that produce no NaN, answer honestly rather than
 reaching for a marker that will not appear:
 
-> "One rule for that is still in: effective rank falling below half its baseline. It is
-> deliberately conservative and it has never fired in our validation runs. We had a second rule
-> on gradient entropy and we deleted it — it fired on a healthy run at step 125 and three
-> rollbacks took that run to chance accuracy. The control arm finished at 87%. We would rather
-> ship a smaller claim than that one."
+> "Yes, one — a loss plateau. We had a run finish at chance accuracy with its loss sitting at
+> ln(10), perfectly finite, and ARC reported nothing for 780 steps. That is the failure this
+> tool exists to catch and it missed it. So we measured: a healthy run's longest stall is 82
+> steps, the dead one's is 764. That rule is in now, and it fires at step 316.
+>
+> It detects it — it does not save it. The run still ends at 10%. By the time 300 stalled steps
+> confirm a plateau, every checkpoint we hold is already post-collapse, so we cut the learning
+> rate and report it rather than pretending a rollback would help.
+>
+> There is also a rank rule, still in, still never fired — a dead run only loses 12.6% of its
+> effective rank, so it cannot reach a 50% threshold. We left it conservative rather than tuning
+> it to a knife-edge, because the last rule we tuned that way took a healthy run to chance."
 
 ### 3.4 The proof
 

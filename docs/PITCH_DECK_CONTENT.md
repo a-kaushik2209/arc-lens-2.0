@@ -116,13 +116,16 @@ What to show, in order:
    code changes.
 2. Dashboard opens — point out the four live chart panels (Vitals, Dynamics, Structural,
    Flow) updating in real time.
-3. Let the run hit a failure (the built-in demo path deliberately drives a NaN loss partway
-   through, so this is reproducible on demand — no need to gamble on a real crash happening
-   live).
-4. Narrate the recovery trace as it appears: failure detected → checkpoint restored →
-   learning rate cut → training resumes — all inside the same run, no restart.
-5. Close on the resumed loss curve continuing smoothly past the point where an unprotected run
-   would have died.
+3. Let the run hit a failure. **Nothing is injected** — the demo runs a real CIFAR-10 CNN at a
+   deliberately aggressive learning rate, so whether it fails and at which step depends on the
+   data order and the initialisation. Seeded runs are reproducible, so do the dry run in
+   `DEMO_SCRIPT.md` §1.4 and know your number before you are on stage.
+4. Narrate the trace as it appears: failure detected → response chosen → applied, all inside the
+   same run, no restart.
+5. Be precise about which failure you got. A `numerical` failure gets a rollback and the loss
+   curve resumes. A `loss_plateau` ("stalled") gets a learning-rate cut and **no** rollback —
+   that run ends at chance accuracy, and the honest line is "we detected a death that every
+   loss-curve tool would have shown as a flat green line", not "we saved it".
 
 **Presenter note:** the recovery trace is a deterministic rule engine, not a live LLM call —
 it's fast and 100% reproducible on stage, which is a feature for a demo, not a limitation to
@@ -237,7 +240,7 @@ users, a specific prize track, mentorship, etc.]*
    collapse — the model quietly losing dimensionality — doesn't show up in a loss curve at all,
    and ARC acts on effective rank falling below half the run's own baseline. Claim this as a
    capability that is *built and wired*, not as one that is proven: the rule is deliberately
-   conservative and has **never fired** in our validation runs (a healthy run bottoms at 96% of
+   conservative and has **never fired** in our validation runs (a healthy run bottoms at 97% of
    baseline, a damaged one at 83%, against a 50% trigger). We had a second silent-failure rule on
    gradient entropy and deleted it — it fired at step 125 on a healthy CIFAR-10 run and drove it
    from 87.43% to chance accuracy, and the signal turns out to converge to the same value on

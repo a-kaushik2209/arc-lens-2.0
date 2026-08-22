@@ -406,7 +406,7 @@ Both fixed in `arc-training` (same author, AGPL). A third fix there —
 was a large part of the overhead in 2.2.
 
 ### 2.6 Test the pure functions
-**Effort: 3 h · Impact: medium — Status: done, 93 tests plus CI**
+**Effort: 3 h · Impact: medium — Status: done, 95 tests plus CI**
 
 See [L-6](SECURITY_AUDIT.md).
 
@@ -507,7 +507,7 @@ path to real usage than the VS Code extension.
 | 2.3 | Fix traceback line numbers | 2 h | Med-High | Trust | ✅ Done (`runpy`, zero injected lines) |
 | 2.4 | Bound checkpoint memory | 3 h | Med-High | Trust | ✅ Done (host-resident store, budget reported) |
 | 2.5 | Visible degradation | 2 h | Med-High | Trust | ✅ Done — found 2 real upstream bugs |
-| 2.6 | Tests + CI | 3 h | Medium | Trust | ✅ Done (45 tests, 3 CI jobs incl. secret scan) |
+| 2.6 | Tests + CI | 3 h | Medium | Trust | ✅ Done (95 tests, 3 CI jobs incl. secret scan) |
 | — | **Structural detection reachable at all** *(not in the original plan)* | — | Medium | Trust | ⚠️ Done, then mostly walked back — see below |
 | 3.1 | Hybrid LLM recovery loop | 2 d | High | Later | Open — deliberate, see below |
 | 3.2 | DDP / FSDP support | 1 w | High | Later | Open — deliberate, see below |
@@ -564,11 +564,32 @@ real detection from a spurious one. Fixed with a fixture verified to diverge wit
 (loss > 1e6 at step 10) and an assertion on the failure *kind*. See
 [C-8](SECURITY_AUDIT.md#second-review-pass).
 
-**What is actually left.** One structural rule: `representation_collapse`, at effective rank
-below 50% of a baseline captured after a 200-step warmup. It has **never fired in validation** —
-a healthy run bottoms at 96% of baseline, a damaged one at 83% — so it is conservative and
-unexercised, not proven. Alongside it: numerical divergence (non-finite or `|loss| > 1e6`), which
-is verified working, and gradient-norm clipping above 50. That is the shipped detection surface.
+**What is actually left.** Two structural rules.
+
+`loss_plateau` fires when the loss has not beaten its best value for 300 consecutive steps. It
+exists because a real lr=0.5 run finished at 10.00% — chance — with its loss pinned at ln(10),
+and ARC reported **zero failures across all 780 steps**: the loss was finite, the gradient norm
+was 0.07, and the rank barely moved. Measured on both arms, a healthy run's longest stall is 82
+steps against the dead run's 764, a 9.3x separation. It fires at step 316–330 on the dead arm and
+never on the healthy one. It detects the death but does not reverse it — accuracy after the
+intervention is unchanged at 10.00%, which is why the response is an LR cut rather than a
+rollback into a ring of post-collapse checkpoints.
+
+`representation_collapse` fires at effective rank below 50% of the run's own baseline. It has
+**never fired in validation**, and now has a measured reason: a healthy run bottoms at 97.2% of
+its step-1 baseline and a *dead* one at 87.4%, so the trigger is four times further away than a
+real collapse reaches. `mean_effective_rank` is the SVD entropy of the weight matrices, and a
+network can emit a constant output while every weight matrix stays well-conditioned — it
+measures weight conditioning, not representational rank. Conservative and unexercised, not
+proven.
+
+A related bug is fixed: baselines used to be captured *after* the 200-step warmup, so a run that
+died earlier had its reference measured on the corpse — the dead arm scored 99.72% of its own
+baseline against the healthy arm's 98.69%, ranking the corpse as more stable. Baselines are now
+captured from the opening samples while the verdict still waits for the warmup.
+
+Alongside those: numerical divergence (non-finite or `|loss| > 1e6`), which is verified working,
+and gradient-norm clipping above 50. That is the shipped detection surface.
 
 Two structural rules removed for the same reason is the generalisable result, and it is worth
 more than the feature would have been: in both cases a signal's natural early-training

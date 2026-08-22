@@ -68,12 +68,95 @@ compared against a control arm that ARC was quietly acting on. Those numbers hav
 rather than adjusted; see §3.
 
 **What ARC can act on, as of these results:** a non-finite or exploded loss, a gradient norm
-above 50, and a representation collapse below half the run's own baseline effective rank. Three
-other rules were built and deleted after measurement — two of them after they demonstrably
-harmed healthy runs. The remaining structural rule has never fired in validation, so it is
-untested in both directions and is described that way rather than claimed.
+above 50, a loss plateau sustained past 300 steps, and a representation collapse below half the
+run's own baseline effective rank. Two other rules were built and deleted after measurement,
+after they demonstrably harmed healthy runs. The rank rule has never fired in validation, so it
+is untested in both directions and is described that way rather than claimed.
 
 <!-- RESULTS_TABLE -->
+
+---
+
+## 2b. The failure the structural tier missed entirely
+
+The plateau rule exists because of a run that exposed a hole in everything above it.
+
+A real CIFAR-10 run at `lr=0.5` (seed 1234, 2 epochs, 780 steps) finished at **10.00%
+validation accuracy** — chance on ten classes — with its final loss at 2.302725 against
+`ln(10) = 2.302585`. The loss fell for about fifteen steps, spiked as the warmup pushed the
+learning rate past ~0.08, and from step 25 onward never moved again.
+
+ARC reported **zero failures and zero interventions across all 780 steps**, with the risk score
+at `LOW / 0.0` throughout.
+
+Every rule was correct to stay silent, which is the point:
+
+| rule | why it did not fire |
+| :--- | :--- |
+| non-finite / exploded loss | loss stayed at 2.3027 — finite, and nowhere near 1e6 |
+| gradient explosion | gradient norm sat around 0.07, threshold is 50 |
+| representation collapse | rank fell only to 87.4% of its step-1 value; trigger needs 50% |
+
+Two separate defects were behind the third row, and both are now fixed.
+
+**The baseline was captured on the corpse.** Structural baselines were taken from the first
+samples *after* a 200-step warmup. This run died by step ~45 and its rank flatlined by step 100,
+so the "healthy" reference was measured on an already-dead model. Ratios then compared dead
+against dead:
+
+| arm | captured baseline | floor | floor / baseline |
+| :--- | ---: | ---: | ---: |
+| lr=0.03 — healthy, 73.61% | 28.312 | 27.940 | 98.69% |
+| lr=0.50 — dead, 10.00% | 25.207 | 25.136 | **99.72%** |
+
+Measured against its own baseline the dead run scored *more stable than the healthy one*,
+because a dead model is perfectly steady. Any collapse beginning before step 200 was invisible
+by construction. The baseline is now captured from the run's opening samples while the verdict
+still waits for the warmup — the two concerns were conflated, and the conflation was the bug.
+
+**Effective rank cannot see this failure at all.** Even with an oracle baseline taken at step 1,
+the dead run bottoms at 87.4% against the healthy run's 97.2% — real separation, about ten
+points of it, and a trigger sitting four times further away. That is not a threshold to tune.
+`mean_effective_rank` is the SVD entropy of the *weight* matrices, and a network can emit a
+nearly constant output while every weight matrix stays well-conditioned. That is exactly what
+happened: weight norm halved from 147.9 to 71.4 while rank held. Weight conditioning is not
+representational rank, and they diverge precisely in this failure mode.
+
+### The signal that does separate
+
+Replaying both arms' per-batch losses through a best-loss-with-patience counter:
+
+| arm | max consecutive steps without improvement |
+| :--- | ---: |
+| lr=0.03 — healthy, 73.61% | 82 |
+| lr=0.50 — dead, 10.00% | **764** |
+
+A 9.3x gap, against 1.1x for effective rank and none at all for gradient entropy. Patience is
+set to 300 — 3.7x above the measured healthy maximum rather than just above it, because 82 is
+one seed on one workload and a noisier task will stall longer while training perfectly well.
+
+Re-running both arms with the rule in place:
+
+| arm | best val acc | failures | interventions |
+| :--- | ---: | ---: | :--- |
+| lr=0.03 — healthy | 74.67% | 0 | none |
+| lr=0.50 — dead | 10.00% | 2 | step 330 LR 3.46e-01→1.73e-01; step 630 LR 2.58e-02→1.29e-02 |
+
+A 1-epoch repeat fired at **step 316**, matching the offline replay's prediction for patience
+300 exactly.
+
+### What this does not do
+
+**Accuracy is still 10.00%.** ARC now sees the failure and cannot reverse it. Confirming a
+plateau takes 300 stalled steps and the network dies around step 45, so the earliest possible
+verdict lands ~285 steps too late for any checkpoint in the ring to be worth restoring. That is
+why the response is `reduce_lr` rather than a rollback: restoring a post-collapse checkpoint
+returns the model to the state it is already in and spends a recovery attempt to do it.
+
+The claim this earns is *"ARC reports a silent death instead of showing a green dashboard for
+780 steps"* — not *"ARC recovers it."* The 9.3x separation is also one seed on one workload and
+has not yet been through the four-learning-rate sweep, which is the standard the two deleted
+rules failed.
 
 ---
 

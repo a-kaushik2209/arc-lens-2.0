@@ -172,8 +172,13 @@ test("failure kinds and actions get readable chart labels", () => {
   const h = loadHelpers();
   assert.equal(h.shortKind("gradient_entropy_collapse"), "entropy collapse");
   assert.equal(h.shortKind("numerical"), "NaN");
+  // The silent-death kind. Without an entry here the chart marker falls back to
+  // the raw snake_case kind, which is the one label a judge is most likely to
+  // be looking at — it is the only failure a healthy-looking run produces.
+  assert.equal(h.shortKind("loss_plateau"), "stalled");
   assert.equal(h.shortKind("something_new"), "something_new");
   assert.equal(h.shortAction("rollback_and_reduce_lr"), "rollback + LR");
+  assert.equal(h.shortAction("reduce_lr"), "LR down");
 });
 
 test("every risk label the backend can emit has a colour", () => {

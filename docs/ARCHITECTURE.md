@@ -51,7 +51,7 @@ arc-lens/
 ├── media/
 │   ├── dashboard.html            Markup, CSS, ECharts setup, event handling
 │   └── vendor/echarts.min.js     Vendored — the dashboard renders with no network
-└── tests/                        45 tests across three suites
+└── tests/                        95 tests across five suites
 ```
 
 The Python sources ship as files. They were previously base64-encoded into `extension.js`,
@@ -290,14 +290,39 @@ which is the entire reason the structural signals are worth collecting.
 
 | Trigger | Condition | Response |
 | :--- | :--- | :--- |
+| `loss_plateau` | loss has not beaten its best value for 300 steps | Reduce LR, **no rollback** |
 | `representation_collapse` | `effective_rank < 50%` of baseline | Rollback + reduce LR |
 
-That is the whole table, and it is worth stating plainly that it used to have three rows.
+That is the whole table. It has had four rows over its life; two were deleted after measurement
+showed them harming healthy runs, and one was added after measurement showed a real failure
+getting past every row that remained.
 
-**`representation_collapse` has never fired in validation.** The threshold is deliberately far
-from anything a working run reaches: on the measured runs a healthy model's effective rank
-bottoms at 96% of its baseline and a damaged one at 83%, against a trigger at 50%. It is a
-conservative rule and correspondingly an unexercised one. It is not a proven capability.
+**`loss_plateau` is the rule that catches a silent death.** A CIFAR-10 run at `lr=0.5` finished
+at chance accuracy with its loss pinned at `ln(10)`, and every other row above stayed silent for
+all 780 steps — the loss was finite, the gradient norm was 0.07, and the rank never fell far
+enough. Replaying both arms, a healthy run's longest stall is 82 steps against the dead run's
+764; patience sits at 300, which is 3.7x above the healthy maximum. It fires at step 316–330 on
+the dead arm and never on the healthy one.
+
+It reduces the learning rate and deliberately does *not* roll back. Confirming a plateau takes
+300 stalled steps, so by the time the verdict lands every checkpoint in the ring is already
+post-collapse; restoring one returns the model to the state it is in and spends a recovery
+attempt doing it. This rule detects a dead run — it does not resurrect one, and the measured
+accuracy after intervention is unchanged at 10.00%.
+
+**`representation_collapse` has never fired in validation, and now has a measured reason.** The
+threshold is far from anything a working run reaches — a healthy model's rank bottoms at 97.2%
+of its step-1 baseline — but it is also further than a *dead* run reaches, which bottoms at
+87.4%. `mean_effective_rank` is the SVD entropy of the weight matrices, and a network can emit a
+constant output while every weight matrix stays well-conditioned. It measures weight
+conditioning, not representational rank. The rule is left conservative and `loss_plateau` covers
+the silent-death case instead.
+
+**The baseline used to be captured after the collapse.** Structural baselines were taken from
+the first samples after the 200-step warmup, so a run that died earlier had its reference
+measured on the corpse — the dead arm scored 99.72% of its own baseline against the healthy
+arm's 98.69%, ranking the corpse as the more stable of the two. The baseline is now captured
+from the opening samples while the verdict still waits for the warmup.
 
 **`gradient_entropy_collapse` was removed after it destroyed a run.** It fired below 1% of an
 opening baseline. On a CIFAR-10 run at `lr=0.25` it fired at step 125 and three rollbacks took

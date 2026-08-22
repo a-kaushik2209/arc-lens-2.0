@@ -5,7 +5,7 @@ unflattering where the evidence is unflattering — better to find the holes now
 of a judge.
 
 **Scope reminder (what ARC Lens actually does today, per `ARCHITECTURE.md`):** a VS Code
-extension that monkey-patches `torch.Tensor.backward` in the user's process, streams loss /
+extension that monkey-patches `Optimizer.step` in the user's process, streams loss /
 gradient norm / LR / GPU memory / effective rank / gradient entropy / weight-update-ratio to an
 in-editor webview dashboard over stdout JSON, and — on a **deterministic threshold rule**
 (NaN/Inf loss or `|loss| > 1e6`, grad norm > 50, effective rank below 50% of the run's own
@@ -91,10 +91,13 @@ Two things are true and worth saying plainly:
    was tuned on a small MLP and could never fire on a CNN whose real value is around 70.
 
    Expect the follow-up "so what actually fires?" and answer it before it is asked: numerical
-   divergence, which is verified working, and gradient clipping. The remaining rank rule has
-   **never fired in validation** — a healthy run bottoms at 96% of baseline and a damaged one at
-   83%, against a 50% trigger. It is conservative and correspondingly unexercised, and presenting
-   it as proven is the fastest way to lose the room.
+   divergence, which is verified working; gradient clipping; and a **loss-plateau** rule that
+   fires when the loss has not improved for 300 steps. That last one catches a run that is dead
+   but numerically healthy — measured at 82 stalled steps on a healthy run against 764 on a dead
+   one — but it detects rather than rescues, and the run it caught still ended at chance
+   accuracy. The rank rule has **never fired in validation** and demonstrably cannot catch that
+   case: a dead run only loses 12.6% of its effective rank against a 50% trigger. Presenting
+   either as a proven rescue is the fastest way to lose the room.
 
 **What is still a defensible differentiator, stated at the size it actually is:** the *effective
 rank* trigger targets **representation collapse**, a failure mode that produces no NaN and no
@@ -104,12 +107,21 @@ user picks — none of them compute effective rank by default). That's a concret
 a judge can verify against the code, unlike "we do anomaly detection" (everyone in the table
 does some version of that).
 
-Say "targets", not "catches". The rule has never fired in any validation run we have, because the
-threshold sits at 50% of baseline while a healthy run bottoms at 96% and a damaged one at 83%.
-The claim that survives scrutiny is "we compute and act on a signal nobody else computes", not
-"we have caught silent failures in the field" — we have not, and a judge who asks for the
-evidence will find the opposite: the one structural rule that *did* fire on a real run was the
-entropy rule, and it fired on a healthy one.
+Say "targets", not "catches". The rank rule has never fired in any validation run we have,
+because the threshold sits at 50% of baseline while a healthy run bottoms at 97.2% and a dead one
+at 87.4% — it measures weight conditioning, not representational rank, and the two diverge
+precisely in this failure mode. The silent failure we *do* catch is a loss plateau, read off the
+loss itself rather than off any structural signal.
+The claim that survives scrutiny is "we detect a silent failure and report it", not "we recover
+from one". We have caught exactly one class in a real run — a model that trained to chance
+accuracy with a perfectly finite loss — and the rule that caught it reads the loss, not any
+structural signal. It cut the learning rate and the run still finished at 10.00%.
+
+A judge who asks for the evidence gets the full sequence, which is not flattering and is the
+point: the entropy rule fired on a *healthy* run and destroyed it, the rank rule has never fired
+at all, and the failure that motivated the whole structural tier went undetected for 780 steps
+until we measured why and replaced the rule with a simpler one. The differentiator is the
+measurement discipline, not a catalogue of caught failures.
 
 ---
 

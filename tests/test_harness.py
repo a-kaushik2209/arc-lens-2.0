@@ -119,13 +119,17 @@ class TestStructuralDetector(unittest.TestCase):
             ))
 
     def test_nothing_is_judged_before_the_warmup(self):
-        """The baseline must not be captured during the opening transient.
+        """No verdict may be reached during the opening transient.
 
         Every structural signal moves by orders of magnitude in a run's first
         few dozen steps simply because the model goes from random to structured.
-        A baseline taken there makes normal early learning look like collapse —
-        which is how the entropy rule took a healthy CIFAR run from 87.4% to
-        chance accuracy at step 125.
+        Judging there makes normal early learning look like collapse — which is
+        how the entropy rule took a healthy CIFAR run from 87.4% to chance
+        accuracy at step 125.
+
+        Capturing the baseline early is a separate question and the answer is
+        the opposite one — see the test below. The two were conflated, and the
+        conflation was a bug.
         """
         m, mod = self._monitor()
         mod.STATE.step = 1
@@ -133,7 +137,48 @@ class TestStructuralDetector(unittest.TestCase):
         for _ in range(mod.STRUCTURAL_SUSTAIN + 5):
             self.assertIsNone(m.check_structural(collapsed),
                               "no structural verdict may be reached during warmup")
-        self.assertEqual(m.baseline, {}, "no baseline may be captured during warmup either")
+
+    def test_baseline_is_captured_before_the_warmup_ends(self):
+        """A collapse that happens early must not become its own baseline.
+
+        This is the bug that made the rank rule structurally blind. The baseline
+        used to be taken from the first samples *after* step 200, so a run that
+        died before then had its "healthy" reference measured on the corpse.
+        Every subsequent ratio compared dead against dead and sat near 1.0.
+
+        Measured on two real runs, the effect inverted the verdict — the dead
+        arm scored better than the healthy one:
+
+            arm               baseline   floor   floor / baseline
+            lr=0.03  73.6%     28.312   27.940       98.69%
+            lr=0.50  10.0%     25.207   25.136       99.72%   <- dead
+
+        Only `effective_rank` is captured this early, and that is deliberate: it
+        moves ~3% across the warmup, while gradient entropy moves four orders of
+        magnitude. An early baseline is safe for the former and was catastrophic
+        for the latter.
+        """
+        m, mod = self._monitor()
+        mod.STATE.step = 1
+        healthy_opening = {"effective_rank": 28.75}
+        for _ in range(mod.STRUCTURAL_BASELINE_SAMPLES):
+            m.check_structural(healthy_opening)
+        self.assertAlmostEqual(m.baseline.get("effective_rank"), 28.75, places=4,
+                               msg="the opening rank must be recorded as the reference")
+
+        # Now collapse it, still inside the warmup, then let the warmup expire.
+        mod.STATE.step = 1
+        for _ in range(mod.STRUCTURAL_SUSTAIN + 5):
+            m.check_structural({"effective_rank": 1.0})
+        self.assertAlmostEqual(m.baseline.get("effective_rank"), 28.75, places=4,
+                               msg="a post-collapse value must not overwrite the baseline")
+
+        mod.STATE.step = mod.STRUCTURAL_WARMUP_STEPS
+        result = None
+        for _ in range(mod.STRUCTURAL_SUSTAIN):
+            result = m.check_structural({"effective_rank": 1.0})
+        self.assertIsNotNone(result, "a collapse that began before the warmup must still be caught")
+        self.assertEqual(result[0], "representation_collapse")
 
     def test_a_collapsed_entropy_alone_never_triggers_anything(self):
         """The second removed rule, locked out.
@@ -231,6 +276,122 @@ class TestStructuralDetector(unittest.TestCase):
         for _ in range(mod.STRUCTURAL_SUSTAIN):
             result = m.check_structural(both_bad)
         self.assertEqual(result[0], "representation_collapse")
+
+
+class TestLossPlateau(unittest.TestCase):
+    """A run can die while its loss stays perfectly finite.
+
+    This is the failure the structural tier was built for and did not catch. A
+    real CIFAR-10 run at lr=0.5 (seed 1234, 2 epochs, 780 steps) finished at
+    10.00% validation accuracy — chance — with its loss pinned at ln(10) from
+    roughly step 25 onward. ARC recorded zero failures and zero interventions,
+    because nothing went non-finite, the gradient norm stayed near 0.07, and the
+    effective-rank rule needs a 50% fall that a dead network never produces.
+
+    The numbers below are measured, not invented. Replaying the per-batch losses
+    of that run and of a healthy lr=0.03 control (73.61% accuracy, same script,
+    same seed, same 780 steps) through the best-loss-with-patience counter:
+
+        arm                 max consecutive steps without improvement
+        healthy lr=0.03                    82
+        dead    lr=0.50                   764
+
+    A 9.3x gap, against the ~10-point separation the rank signal offered and the
+    zero the entropy signal offered. The default patience of 300 sits 3.7x above
+    the healthy maximum and fires on the dead run at step 316.
+    """
+
+    def _monitor(self):
+        import _arc_bootstrap
+
+        m = _arc_bootstrap.OptimizerMonitor.__new__(_arc_bootstrap.OptimizerMonitor)
+        m.best_loss = float("inf")
+        m.steps_without_improvement = 0
+        return m, _arc_bootstrap
+
+    def _healthy_losses(self, n=780):
+        """Falling loss with heavy per-batch noise, as measured on lr=0.03.
+
+        Noise amplitude is deliberately large — a real per-batch loss on this
+        task swings ~40% of its mean — because a plateau rule that only survives
+        on a smoothed curve is a rule that fires on real training.
+        """
+        import random
+
+        rng = random.Random(1234)
+        out = []
+        for i in range(n):
+            floor = 2.30 * (0.27 ** (i / n))  # 2.30 -> ~0.62, as measured
+            out.append(floor * (1.0 + rng.uniform(-0.35, 0.35)))
+        return out
+
+    def _dead_losses(self, n=780):
+        """Loss pinned at ln(10), as measured on lr=0.50."""
+        import math
+        import random
+
+        rng = random.Random(1234)
+        out = [2.32, 2.28, 2.25, 2.22, 2.24, 2.13, 2.14, 2.10, 2.23, 2.06]
+        while len(out) < n:
+            out.append(math.log(10) + rng.uniform(-0.04, 0.06))
+        return out[:n]
+
+    def test_healthy_run_never_plateaus(self):
+        m, mod = self._monitor()
+        worst = 0
+        for loss in self._healthy_losses():
+            self.assertIsNone(
+                m.check_plateau(loss),
+                f"plateau fired on a healthy falling loss after "
+                f"{m.steps_without_improvement} idle steps",
+            )
+            worst = max(worst, m.steps_without_improvement)
+        # Guard the margin itself, not just the verdict: if a future change
+        # erodes the gap between the healthy maximum and the patience, this
+        # fails while the run is still healthy rather than in production.
+        self.assertLess(worst, mod.LOSS_PLATEAU_PATIENCE / 2)
+
+    def test_dead_run_is_caught(self):
+        m, mod = self._monitor()
+        fired_at = None
+        for i, loss in enumerate(self._dead_losses(), start=1):
+            if m.check_plateau(loss) is not None:
+                fired_at = i
+                break
+        self.assertIsNotNone(fired_at, "a run pinned at ln(10) for 780 steps was not caught")
+        self.assertLess(fired_at, 780, "detection must land inside the run, not after it")
+
+    def test_kind_and_reason_are_reported(self):
+        m, mod = self._monitor()
+        result = None
+        for loss in self._dead_losses():
+            result = m.check_plateau(loss)
+            if result is not None:
+                break
+        self.assertIsNotNone(result)
+        kind, reason = result
+        self.assertEqual(kind, "loss_plateau")
+        self.assertIn("improve", reason.lower())
+
+    def test_counter_resets_after_firing(self):
+        """Without a reset the rule re-fires every step and the LR is cut to zero."""
+        m, mod = self._monitor()
+        for loss in self._dead_losses():
+            if m.check_plateau(loss) is not None:
+                break
+        self.assertEqual(m.steps_without_improvement, 0)
+
+    def test_an_absent_loss_is_not_a_plateau(self):
+        """NaN reaches here when the loss could not be observed at all.
+
+        Counting that as "no improvement" would let a run with an unobservable
+        loss — torch.autograd.backward(), LBFGS — accumulate idle steps and trip
+        the rule while training perfectly well.
+        """
+        m, _ = self._monitor()
+        for _ in range(2000):
+            self.assertIsNone(m.check_plateau(float("nan")))
+        self.assertEqual(m.steps_without_improvement, 0)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

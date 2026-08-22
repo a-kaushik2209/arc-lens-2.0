@@ -176,6 +176,31 @@ RANK_COLLAPSE_FRACTION = _env_float("ARC_RANK_COLLAPSE", 0.5)
 # Structural signals move by orders of magnitude while a model goes from
 # random to structured. Nothing is judged until the run is past that.
 STRUCTURAL_WARMUP_STEPS = _env_int("ARC_STRUCTURAL_WARMUP", 200)
+
+# Loss plateau — the rule that actually catches a silent death.
+#
+# Measured on this workload (CIFAR-10, 9-layer CNN, seed 1234, 780 steps), by
+# replaying both arms' per-batch losses through the counter below:
+#
+#     arm                  max consecutive steps without improvement
+#     lr=0.03  73.6%                      82        <- healthy
+#     lr=0.50  10.0%                     764        <- dead, loss pinned at ln(10)
+#
+# A 9.3x gap. That is the separation the two deleted rules never had, and the
+# separation the surviving rank rule could not reach: on the same pair of runs
+# effective rank fell only to 87.4% of its step-1 value on the dead arm against
+# 97.2% on the healthy one, nowhere near the 50% its trigger required.
+#
+# Patience sits 3.7x above the measured healthy maximum rather than just above
+# it, because 82 is one seed on one workload and a task with noisier batches
+# will stall longer while training perfectly well. The cost of being late is a
+# few hundred wasted steps; the cost of being early is the entropy rule, which
+# took a healthy run from 87.4% to chance.
+LOSS_PLATEAU_PATIENCE = _env_int("ARC_PLATEAU_PATIENCE", 300)
+# A new best must beat the old one by this much to count. Guards against a
+# monotonically-but-uselessly improving loss ratcheting the counter forever.
+LOSS_PLATEAU_MIN_DELTA = _env_float("ARC_PLATEAU_DELTA", 0.001)
+
 MAX_ATTEMPTS_PER_KIND = _env_int("ARC_MAX_ATTEMPTS", 3)
 # Upper bound on simultaneously tracked optimizers. Enough for a GAN or an
 # actor-critic; small enough that a sweep loop cannot accumulate checkpoints for
@@ -471,6 +496,57 @@ class OptimizerMonitor:
         self.baseline_samples = 0
         self.structural_strikes = 0
         self.structural_kind: str | None = None
+        # Loss-plateau state. Tracked per optimizer, not globally, so a GAN's
+        # two optimizers plateau independently.
+        self.best_loss = float("inf")
+        self.steps_without_improvement = 0
+
+    # -- silent death ---------------------------------------------------------
+    def check_plateau(self, loss_val: float) -> tuple[str, str] | None:
+        """Detect a run that has stopped learning while its loss stays finite.
+
+        This is the failure mode the structural tier was built for and did not
+        catch. A real run at lr=0.5 finished at 10.00% validation accuracy —
+        chance — with its loss pinned at ln(10) for 750+ consecutive steps. It
+        produced no NaN, no gradient spike, and no rank collapse, so every rule
+        ARC had was silent for all 780 steps.
+
+        The counter is the whole rule: how long since the loss last set a new
+        best. It needs no collector, works without ``arc-training`` installed,
+        and is the only signal measured on this workload that separates the two
+        arms by more than a factor of two. See LOSS_PLATEAU_PATIENCE.
+
+        Deliberately keyed on the *best-ever* batch loss rather than a moving
+        average. A dead run's mean is stable, so a mean-based rule has to pick a
+        tolerance; a best-ever counter needs no tolerance at all, because a run
+        that is still learning keeps producing new minima and a dead one never
+        produces another.
+        """
+        # An unobservable loss arrives here as NaN — torch.autograd.backward(),
+        # a non-scalar backward, LBFGS. Counting that as "no improvement" would
+        # trip the rule on a run that is training perfectly well and simply
+        # cannot be watched. Absent is not stalled.
+        if math.isnan(loss_val) or math.isinf(loss_val):
+            return None
+
+        if loss_val < self.best_loss - LOSS_PLATEAU_MIN_DELTA:
+            self.best_loss = loss_val
+            self.steps_without_improvement = 0
+            return None
+
+        self.steps_without_improvement += 1
+        if self.steps_without_improvement < LOSS_PLATEAU_PATIENCE:
+            return None
+
+        stalled = self.steps_without_improvement
+        # Reset before returning. Without this the rule re-fires on every
+        # subsequent step and the agent walks the learning rate to zero.
+        self.steps_without_improvement = 0
+        return (
+            "loss_plateau",
+            f"loss has failed to improve on its best value of {self.best_loss:.4f} "
+            f"for {stalled} consecutive steps",
+        )
 
     # -- learning rate --------------------------------------------------------
     def enforce_lr(self) -> None:
@@ -630,12 +706,32 @@ class OptimizerMonitor:
         # inside that transient makes normal early learning look like collapse —
         # which is exactly how the entropy rule came to kill a healthy run at
         # step 125.
-        if STATE.step < STRUCTURAL_WARMUP_STEPS:
-            return None
-        if self.baseline_samples < STRUCTURAL_BASELINE_SAMPLES:
-            if rank is not None and rank > 0:
-                self.baseline["effective_rank"] = max(self.baseline.get("effective_rank", 0.0), rank)
+        # Capture the baseline from the run's *opening* samples, but do not
+        # judge against it until the warmup has passed.
+        #
+        # These were one step before, and collapsing them was a real bug. The
+        # baseline was taken from the first samples after step 200, which means
+        # a run that died before step 200 had its "healthy" reference measured
+        # on the corpse. Ratios are then computed dead-against-dead and sit at
+        # ~1.0 forever. Measured on a real pair of runs, that made the dead arm
+        # score *better* than the healthy one:
+        #
+        #     arm                baseline   floor    floor / baseline
+        #     lr=0.03  73.6%      28.312    27.940        98.69%
+        #     lr=0.50  10.0%      25.207    25.136        99.72%   <- dead
+        #
+        # The dead run collapsed by step 45 and flatlined by step 100, so its
+        # post-warmup baseline was simply its collapsed value. Taking the
+        # baseline early fixes that: against a step-1 reference the dead arm
+        # reads 87.4% and the healthy arm 97.2%.
+        #
+        # Judging still waits for the warmup, because that guard is what stops a
+        # rule firing on the random-to-structured transient. The two concerns
+        # were conflated; they are separate and only one of them needs to wait.
+        if rank is not None and rank > 0 and self.baseline_samples < STRUCTURAL_BASELINE_SAMPLES:
+            self.baseline["effective_rank"] = max(self.baseline.get("effective_rank", 0.0), rank)
             self.baseline_samples += 1
+        if STATE.step < STRUCTURAL_WARMUP_STEPS:
             return None
 
         triggered: tuple[str, str] | None = None
@@ -676,11 +772,28 @@ class OptimizerMonitor:
             and rank is not None
             and rank < base_rank * RANK_COLLAPSE_FRACTION
         ):
-            # Ungated, because the threshold is already conservative by a wide
-            # margin. Measured on the same runs: a healthy run's rank bottoms at
-            # 96% of its baseline and the damaged one at 83%, against a trigger
-            # at 50%. Nothing plausible reaches it except a real collapse, so
-            # qualifying it further would only risk missing one.
+            # Ungated, because the threshold is conservative by a wide margin.
+            #
+            # Know what that margin costs. The original note here read "nothing
+            # plausible reaches 50% except a real collapse" — checked only in
+            # the false-positive direction. Measured in the other direction, a
+            # genuinely dead network does not reach it either: a CIFAR run that
+            # finished at chance accuracy bottomed at 87.4% of its step-1 rank,
+            # against 97.2% for a healthy one. Real separation, roughly ten
+            # points of it, and a trigger sitting four times further away.
+            #
+            # That is not a threshold to tune. `effective_rank` is the SVD
+            # entropy of the *weight* matrices, and a network can emit a nearly
+            # constant output while every weight matrix stays well-conditioned —
+            # which is exactly what happened, weight norm halving from 147.9 to
+            # 71.4 while rank held. Weight conditioning is not representational
+            # rank; they diverge precisely in this failure mode.
+            #
+            # So this rule is left conservative and `loss_plateau` covers the
+            # silent-death case instead, on a signal that separates the same two
+            # runs by 9.3x rather than 1.1x. Moving this threshold up to catch
+            # what plateau already catches would buy nothing and reintroduce the
+            # knife-edge that got two previous rules deleted.
             triggered = (
                 "representation_collapse",
                 f"mean effective rank {rank:.2f} has fallen below "
@@ -1067,8 +1180,14 @@ def _on_optimizer_step_inner(optimizer) -> None:
     if is_bad:
         _handle_failure(optimizer, monitor, step, loss_val, grad_norm, lr, advanced,
                         kind="numerical", reason="loss is non-finite or exploded")
-    elif monitor is not None and advanced:
-        structural = monitor.check_structural(advanced)
+    elif monitor is not None:
+        # Checked every step, not on the advanced-sampling cadence: the plateau
+        # counter needs every loss to be correct, and it costs two float
+        # comparisons. It also runs without `arc-training` installed, which the
+        # collector-based checks below cannot.
+        structural = monitor.check_plateau(loss_val) if loss_known else None
+        if structural is None and advanced:
+            structural = monitor.check_structural(advanced)
         if structural is not None and structural[0] not in STATE.abandoned_kinds:
             # Once a kind has been declared unrecoverable it has been reported
             # in full; re-announcing the same diagnosis every sample would bury

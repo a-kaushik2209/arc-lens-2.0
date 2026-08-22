@@ -87,10 +87,35 @@ consecutive breach (31 samples vs 26). A proxy for "the learning rate is large",
 is failing", and acting on it cost 1.74 and 0.78 points of validation accuracy in A/B runs that
 needed no help.
 
-**What is left is effective rank**, firing below 50% of a baseline that is not captured until
-step 200. We will say plainly that it has **never fired in validation** — a healthy run bottoms
-at 96% of baseline and a damaged one at 83%, against a 50% trigger. It is conservative and
-therefore unexercised. It is not a demonstrated capability, and we do not present it as one.
+**What is left is effective rank and a loss-plateau rule**, and the second exists because the
+first was not enough.
+
+Effective rank fires below 50% of the run's own baseline. It has **never fired in validation**,
+and we now know why in both directions: a healthy run bottoms at 97.2% of its step-1 baseline
+and a *dead* one — 10.00%, chance accuracy — bottoms at 87.4%. The trigger is four times further
+away than a real collapse reaches. `mean_effective_rank` is the SVD entropy of the weight
+matrices, and a network can emit a constant output while every weight matrix stays
+well-conditioned, so it measures weight conditioning rather than representational rank. It is
+not a demonstrated capability and we do not present it as one.
+
+That gap is what the **loss-plateau** rule closes. A CIFAR-10 run at lr=0.5 finished at chance
+accuracy with its loss pinned at ln(10) and ARC reported **zero failures across 780 steps** —
+loss finite, gradient norm 0.07, rank barely moved. Replaying both arms, a healthy run's longest
+stall is 82 steps against the dead run's 764: a 9.3x separation, against 1.1x for rank and none
+for entropy. Patience is 300, and it fires at step 316–330 on the dead arm and never on the
+healthy one.
+
+We also fixed a bug that made the rank rule structurally blind: baselines were captured *after*
+a 200-step warmup, so a run dying before then had its reference measured on the corpse — the
+dead arm scored 99.72% of its own baseline against the healthy arm's 98.69%, ranking the corpse
+as the more stable run. The baseline is now taken from the opening samples; the verdict still
+waits for the warmup.
+
+**Detection is not rescue, and we say so.** Accuracy after the plateau intervention is still
+10.00%. Confirming a stall takes 300 steps and the network dies around step 45, so every
+checkpoint in the ring is post-collapse by then — which is why the response is an LR cut and not
+a rollback. The claim is that ARC reports a silent death instead of showing a green dashboard
+for 780 steps, not that it recovers one.
 
 Two rules removed for the same underlying reason is the honest through-line: a signal's natural
 early-training trajectory resembled the pathology it was meant to detect, in both cases. That is
@@ -267,7 +292,8 @@ findings, and these are the ones that changed what the product claims:
   diverge with ARC detached, and the assertion now checks the failure *kind*.
 
 We would rather a judge hear this from us: our detection surface is smaller than it was. It is
-numerical divergence, gradient clipping, and one conservative rank rule that has never fired.
+numerical divergence, gradient clipping, a loss-plateau rule that catches silent death but
+cannot reverse it, and one conservative rank rule that has never fired.
 
 We would rather show this than hide it. The honest summary is that three of the six were
 *introduced or left behind by the first round of fixes*, they were all in code that had just been
@@ -318,8 +344,10 @@ Three things a manual checkpoint script doesn't give you for free: automatic *de
 you likely aren't logging yourself — effective rank, gradient entropy, update ratio and flow
 ratio, charted live. The caveat on that third item is real: only effective rank is wired to a
 trigger, and that trigger has never fired in validation. The gradient-entropy rule was deleted
-after it cost a healthy run 77 points of accuracy (Q5). So the honest version is "signals you
-aren't charting", not "failures we catch before the loss does". The honest caveat: our current checkpoint interval
+after it cost a healthy run 77 points of accuracy (Q5). The one silent failure we *do* catch is
+a loss plateau, and that is read off the loss itself rather than off any of these four signals.
+So the honest version is "signals you aren't charting", not "failures we catch before the loss
+does". The honest caveat: our current checkpoint interval
 is fixed (every 10 steps, 3 checkpoints retained) and calls private/underscore-prefixed
 `arc-training` APIs wrapped in bare `except: pass`, so if that internal API changes in a future
 `arc-training` release, checkpointing can silently go inert while the dashboard keeps looking
@@ -465,7 +493,7 @@ One item cannot be closed from here.
 | Fixed | M-8 | Nonce CSP, all 22 inline handlers converted |
 | Fixed | M-9 | Interpreter resolved via the Python extension |
 | Fixed | M-10 | Dead license code and the hardcoded JWT backdoor deleted |
-| Fixed | L-1…L-11 | Tail flush, batch-timer race, ring buffer, panel leak, reduce, 45 tests + CI |
+| Fixed | L-1…L-11 | Tail flush, batch-timer race, ring buffer, panel leak, reduce, 95 tests + CI |
 | **Owner action** | C-1 | Source side fully clean and CI-guarded; the four *published* `.vsix` files still contain the old secret and need revocation + supersession |
 
 Second review pass, over the code the table above describes as fixed:
@@ -487,7 +515,10 @@ Validation pass, from running the code the two tables above describe as fixed:
 | :--- | :--- | :--- |
 | Fixed | C-7 | `gradient_entropy_collapse` took a run from 87.43% to 10.00% and then declared it unrecoverable; the signal converges to the same value on healthy and dead runs, so the rule is deleted and structural baselines now wait 200 steps |
 | Fixed | C-8 | Three tests were passing on C-7's false positive against a fixture that never diverged — the suite was certifying the bug; fixture rebuilt and verified without ARC, assertion now checks the failure `kind` |
-| Open | — | `representation_collapse`, the one remaining structural rule, has never fired in validation (healthy run bottoms at 96% of baseline, damaged at 83%, trigger at 50%) — conservative, and therefore unexercised |
+| Fixed | C-9 | A real lr=0.5 run finished at 10.00% — chance — with its loss pinned at ln(10), and ARC reported zero failures across all 780 steps; no rule could see a run that is dead but numerically healthy. Added `loss_plateau` (82 vs 764 stalled steps, healthy vs dead) |
+| Fixed | C-10 | Structural baselines were captured *after* the 200-step warmup, so a run dying earlier had its reference measured post-collapse — the dead arm scored 99.72% of its own baseline against the healthy arm's 98.69%. Baseline now captured from the opening samples; the verdict still waits for the warmup |
+| Open | — | `representation_collapse` has never fired in validation, and now demonstrably cannot catch this failure class: a dead run bottoms at 87.4% of its step-1 rank against a 50% trigger, because the signal measures weight conditioning rather than representational rank |
+| Open | — | `loss_plateau` detects a silent death but does not reverse it — accuracy after intervention is unchanged at 10.00%, because confirmation takes 300 steps and every retained checkpoint is post-collapse by then |
 
 Two things worth saying out loud with this table:
 
@@ -498,8 +529,12 @@ harmful: the update-ratio rule cost 1.74 and 0.78 accuracy points on healthy run
 gradient-entropy rule took a run from 87.43% to chance and then declared it unrecoverable (C-7).
 Both are deleted. Removing the second one also revealed that three integration tests had been
 passing on its false positive, against a fixture that never actually diverged — the suite was
-certifying the bug (C-8). What survives is numerical divergence detection, which is verified
-working, gradient clipping, and one conservative rank rule that has never fired.
+certifying the bug (C-8). A later run then showed that what survived still could not see a run
+that dies without going non-finite — 10.00% accuracy, zero failures reported across 780 steps
+(C-9) — which added the loss-plateau rule and exposed a baseline captured on the corpse (C-10).
+What survives is numerical divergence detection, which is verified working, gradient clipping, a
+loss-plateau rule that detects silent death without reversing it, and one conservative rank rule
+that has never fired.
 
 **We report the runs ARC cannot save.** `docs/EXPERIMENT_RESULTS.md` includes configurations
 where ARC detects the failure and the run still ends at chance accuracy, because a collapsed
