@@ -236,7 +236,7 @@ npm test                       # TypeScript + dashboard suites
 python tests/test_harness.py   # harness, detector, checkpointing, end-to-end
 ```
 
-108 tests — 46 TypeScript/dashboard, 62 Python. The Python suite includes six end-to-end tests
+120 tests — 55 TypeScript/dashboard, 65 Python. The Python suite includes ten end-to-end tests
 that run the real harness against real training loops, asserting that gradient accumulation does
 not inflate the step count, that an LR intervention survives a scheduler rewriting the learning
 rate every step, that baseline mode never intervenes, and that tracebacks point at the user's
@@ -259,6 +259,9 @@ CI additionally fails the build on any secret-shaped literal in source.
   deliberately still open
 * [`docs/EXPERIMENT_RESULTS.md`](docs/EXPERIMENT_RESULTS.md) — measured A/B results
 * [`docs/SWEEP_LOG.md`](docs/SWEEP_LOG.md) — every A/B sweep run, including the abandoned ones
+* [`docs/WASTE_REDUCTION.md`](docs/WASTE_REDUCTION.md) — measured waste-reduction
+  numbers (telemetry bytes, post-verdict compute, accessibility score), both arms,
+  including the two results that came back negative
 
 ## License
 

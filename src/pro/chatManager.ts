@@ -1,5 +1,6 @@
 import * as https from "https";
 import { getOpenRouterKey, getLLMModel } from "./licenseManager";
+import { providerFor, modelForProvider } from "./providerRouting";
 
 const OPENROUTER_HOST = "openrouter.ai";
 const OPENROUTER_PATH = "/api/v1/chat/completions";
@@ -30,47 +31,33 @@ export function streamChatCompletion(
     return () => {};
   }
 
-  const isGroq = apiKey.startsWith("gsk_") || apiKey.includes("groq");
-  const isAnthropic = apiKey.startsWith("sk-ant-") || apiKey.includes("anthropic");
-  const isGemini = apiKey.startsWith("AIzaSy") || apiKey.includes("gemini") || apiKey.includes("google");
-  const isOpenAI = (apiKey.startsWith("sk-") && !apiKey.startsWith("sk-or-") && !apiKey.startsWith("sk-ant-")) || apiKey.includes("openai");
+  const provider = providerFor(apiKey);
+  const isAnthropic = provider === "anthropic";
 
   let hostname = OPENROUTER_HOST;
   let path = OPENROUTER_PATH;
-  let model = getLLMModel();
+  const model = modelForProvider(provider, getLLMModel());
   let headers: { [key: string]: string } = {
     "Content-Type": "application/json"
   };
 
-  if (isGroq) {
+  if (provider === "groq") {
     hostname = "api.groq.com";
     path = "/openai/v1/chat/completions";
     headers["Authorization"] = `Bearer ${apiKey}`;
-    if (!model.includes("llama") && !model.includes("mixtral")) {
-      model = "llama-3.3-70b-versatile";
-    }
-  } else if (isAnthropic) {
+  } else if (provider === "anthropic") {
     hostname = "api.anthropic.com";
     path = "/v1/messages";
     headers["x-api-key"] = apiKey;
     headers["anthropic-version"] = "2023-06-01";
-    if (!model.includes("claude")) {
-      model = "claude-opus-5";
-    }
-  } else if (isGemini) {
+  } else if (provider === "gemini") {
     hostname = "generativelanguage.googleapis.com";
     path = "/v1beta/openai/chat/completions";
     headers["Authorization"] = `Bearer ${apiKey}`;
-    if (!model.includes("gemini")) {
-      model = "gemini-1.5-flash";
-    }
-  } else if (isOpenAI) {
+  } else if (provider === "openai") {
     hostname = "api.openai.com";
     path = "/v1/chat/completions";
     headers["Authorization"] = `Bearer ${apiKey}`;
-    if (!model.startsWith("gpt-")) {
-      model = "gpt-4o-mini";
-    }
   } else {
     // OpenRouter (default)
     hostname = OPENROUTER_HOST;
@@ -112,6 +99,11 @@ export function streamChatCompletion(
   };
 
   let buffer = "";
+  // Anthropic's SSE stream pairs an `event: <type>` line with the `data: `
+  // line that follows it; the event type is what tells you whether the data
+  // is a text delta or an end-of-stream marker, so it has to be tracked
+  // across chunks (the two lines can land in different `data` events).
+  let currentEvent = "";
 
   // Every terminal path below can be reached more than once for a single
   // request: the SSE stream sends `data: [DONE]`, and then the socket also
@@ -147,7 +139,12 @@ export function streamChatCompletion(
 
       for (const line of lines) {
         const trimmed = line.trim();
-        if (!trimmed || !trimmed.startsWith("data: ")) continue;
+        if (!trimmed) continue;
+        if (trimmed.startsWith("event: ")) {
+          currentEvent = trimmed.slice(7).trim();
+          continue;
+        }
+        if (!trimmed.startsWith("data: ")) continue;
         const data = trimmed.slice(6);
         if (data === "[DONE]") {
           finish();
@@ -155,9 +152,25 @@ export function streamChatCompletion(
         }
         try {
           const parsed = JSON.parse(data);
-          const delta = parsed?.choices?.[0]?.delta?.content || parsed?.delta?.text;
-          if (delta) {
-            onChunk(delta);
+          if (isAnthropic) {
+            // Anthropic never sends "data: [DONE]" — the stream ends with a
+            // `message_stop` event, and text only ever arrives on
+            // `content_block_delta` events shaped as
+            // {type:"content_block_delta", delta:{type:"text_delta", text}}.
+            if (currentEvent === "content_block_delta" && typeof parsed?.delta?.text === "string") {
+              onChunk(parsed.delta.text);
+            } else if (currentEvent === "message_stop") {
+              finish();
+              return;
+            } else if (currentEvent === "error") {
+              fail(`Anthropic API error: ${parsed?.error?.message || JSON.stringify(parsed)}`);
+              return;
+            }
+          } else {
+            const delta = parsed?.choices?.[0]?.delta?.content || parsed?.delta?.text;
+            if (delta) {
+              onChunk(delta);
+            }
           }
         } catch {
           // skip malformed SSE lines

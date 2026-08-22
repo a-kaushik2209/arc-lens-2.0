@@ -107,7 +107,7 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "test": "node --test tests/",
+    "test": "node --test tests/*.test.js",
     "benchmark": "python python/benchmark_overhead.py"
   },
   "devDependencies": {
