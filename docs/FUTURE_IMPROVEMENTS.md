@@ -661,6 +661,16 @@ would be worse than not shipping it.
 **C-1's published artifacts.** The four released `.vsix` files still carry the old signing
 secret. That needs the marketplace account owner, not a code change.
 
+**Stalled/non-converging training is not detected.** `_risk_score()` in `_arc_bootstrap.py`
+only scores three things: `is_bad` (NaN/Inf), loss more than doubling over the last 5 samples
+(explosion), and gradient norm thresholds (blowup). A run whose loss sits flat — LR too high
+to descend, but not high enough to explode — always scores `risk=0.0/LOW` no matter how many
+epochs pass, because nothing checks "loss isn't decreasing." Found running `train_demo.py`
+itself: 3 straight epochs at loss≈2.30 (CIFAR-10, 10 classes — random-chance accuracy), risk
+pinned LOW throughout. Deliberately not fixed yet: picking a stall threshold that doesn't
+false-positive during normal warmup (loss often looks flat before it starts moving) is a real
+design call, not a one-line addition.
+
 ---
 
 ## If there is time for exactly three things
