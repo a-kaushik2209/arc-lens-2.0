@@ -79,11 +79,31 @@ test("an Anthropic key is not mistaken for OpenAI", () => {
 
 test("no native provider is ever sent OpenRouter formatting", () => {
   // The regression that motivated this file.
+  //
+  // "no slash" is not the property — Groq's own model ids carry a vendor
+  // prefix ("openai/gpt-oss-120b"), so asserting that would force a wrong
+  // model on the one provider whose ids legitimately contain one. What must
+  // never happen is the OpenRouter string reaching a native API, and the
+  // `:tier` suffix is OpenRouter's alone.
   for (const provider of ["groq", "anthropic", "gemini", "openai"]) {
     const model = modelForProvider(provider, SHIPPED_DEFAULT);
-    assert.ok(!model.includes("/"), `${provider} got a vendor prefix: ${model}`);
+    assert.notEqual(model, SHIPPED_DEFAULT, `${provider} got the OpenRouter default verbatim`);
     assert.ok(!model.includes(":"), `${provider} got a tier suffix: ${model}`);
   }
+});
+
+test("Groq keeps the vendor prefix its own model ids require", () => {
+  // Stripping it turned "openai/gpt-oss-120b" into "gpt-oss-120b", which Groq
+  // does not serve.
+  assert.equal(modelForProvider("groq", "openai/gpt-oss-120b"), "openai/gpt-oss-120b");
+  assert.equal(modelForProvider("groq", "meta-llama/llama-prompt-guard-2-86m"), "meta-llama/llama-prompt-guard-2-86m");
+});
+
+test("the Groq fallback is not a model Groq has retired", () => {
+  // "llama-3.3-70b-versatile" was the fallback until Groq withdrew it and
+  // began answering "does not exist or you do not have access to it" — which
+  // reads as a rejected key rather than a stale default.
+  assert.notEqual(modelForProvider("groq", SHIPPED_DEFAULT), "llama-3.3-70b-versatile");
 });
 
 test("the constant here matches the default package.json actually ships", () => {

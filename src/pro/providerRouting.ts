@@ -105,7 +105,15 @@ export function modelForProvider(provider: Provider, configured: string): string
 
   switch (provider) {
     case "groq":
-      return chosen && (bare.includes("llama") || bare.includes("mixtral")) ? bare : "llama-3.3-70b-versatile";
+      // Groq's own ids carry a vendor prefix ("openai/gpt-oss-120b",
+      // "meta-llama/…"), so unlike the others it is handed the id with the
+      // prefix intact — only OpenRouter's `:tier` suffix is stripped.
+      //
+      // The fallback is not pinned to a Llama build any more:
+      // "llama-3.3-70b-versatile" was retired underneath us and Groq answered
+      // with "does not exist or you do not have access to it", which reads as
+      // a bad key rather than a stale default.
+      return chosen ? configured.split(":")[0] : "openai/gpt-oss-120b";
     case "anthropic":
       return chosen && bare.includes("claude") ? bare : "claude-opus-5";
     case "gemini":
