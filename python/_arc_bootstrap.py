@@ -1239,10 +1239,13 @@ def _risk_score(losses, grad_norm: float, is_bad: bool, stall_ratio: float = 0.0
 
     if len(losses) >= 5 and losses[0] > 0 and losses[-1] > losses[0] * 2.0:
         risk += 0.4
-    if grad_norm > 10.0:
-        risk += 0.4
-    if grad_norm > 50.0:
-        risk += 0.2
+    # A continuous ramp rather than two step thresholds: the old version held
+    # the exact same risk value for every step between norm 10 and 50 (and
+    # every step above 50), which is most of a run — the gauge only moved on
+    # the rare step that crossed a threshold. log10(norm/10) hits the same
+    # anchors the thresholds did (0 at norm 10, 0.3 at 100, 0.6 at 1000) but
+    # changes with every sample in between.
+    risk += min(0.6, max(0.0, math.log10(max(grad_norm, 1e-9) / 10.0)) * 0.3)
     risk = min(risk, 1.0)
     label = "CRITICAL" if risk > 0.8 else "HIGH" if risk > 0.5 else "MEDIUM" if risk > 0.25 else "LOW"
     return risk, label

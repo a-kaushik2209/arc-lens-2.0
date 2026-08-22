@@ -2126,8 +2126,28 @@ function updateStatus(status, text) {
 
 window.addEventListener('message', e => {
   const msg = e.data;
-  if (msg.type === 'batch') msg.events.forEach(ev => handleMessage(ev));
-  else handleMessage(msg);
+  if (msg.type === 'batch') {
+    // Risk is computed and streamed every optimizer step, uncoalesced — but a
+    // batch is one paint. Several risk samples land in the same 100ms window,
+    // and only the last one a batch ever rendered, so a brief spike (e.g. the
+    // step it takes to detect a numerical failure) was silently overwritten by
+    // whatever the run settled to a few steps later before the browser ever
+    // painted it. The gauge read as static because the interesting value was
+    // real but never shown.
+    const risks = msg.events.filter(ev => ev.type === 'risk');
+    const peak = risks.length > 1
+      ? risks.reduce((a, b) => (b.score || 0) > (a.score || 0) ? b : a)
+      : null;
+    const showsPeakFirst = peak && peak !== risks[risks.length - 1];
+    msg.events.forEach(ev => handleMessage(ev));
+    if (showsPeakFirst) {
+      const settled = risks[risks.length - 1];
+      handleMessage(peak);
+      setTimeout(() => handleMessage(settled), 450);
+    }
+  } else {
+    handleMessage(msg);
+  }
 });
 
 // One delegated listener instead of inline onclick attributes.
