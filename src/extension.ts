@@ -1585,7 +1585,18 @@ window.addEventListener('message',e=>{
     streamEl=null;
     setStreaming(false);
   } else if(msg.type==='stream_error'){
-    if(streamEl){streamEl.innerHTML='<p style="color:#ff4444">Error: '+msg.text+'</p>';}
+    // Two fixes here. The error was only rendered when a stream element
+    // happened to exist, so an error arriving outside a live turn vanished
+    // and the panel just sat there having answered nothing. And msg.text is
+    // whatever the provider put in its error body — concatenating that into
+    // innerHTML let a remote host inject markup into the panel.
+    hideEmpty();
+    const target = streamEl || appendMsg('assistant','');
+    target.innerHTML='';
+    const p=document.createElement('p');
+    p.style.color='#ff4444';
+    p.textContent='Error: '+msg.text;
+    target.appendChild(p);
     streamEl=null;
     setStreaming(false);
   }
