@@ -760,9 +760,15 @@ async function launchAgent(
     flushBatch();
 
     if (stoppedByUser) {
+      // `stopped` has to be its own field. exitCode 0 is used here because a
+      // deliberate SIGTERM is not a crash, but the dashboard reads exitCode
+      // alone to choose COMPLETED vs ERROR — so a killed run rendered as a
+      // successful one, in the status badge, the strip, and the exported
+      // report. Neither COMPLETED nor ERROR is true; stopped is a third state.
       sendToPanel({
         type: "done",
         exitCode: 0,
+        stopped: true,
         mode,
         message: "Training stopped by user.",
       });

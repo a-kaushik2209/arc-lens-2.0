@@ -906,6 +906,15 @@ function shortKind(kind) { return KIND_LABELS[kind] || kind || 'failure'; }
 // status strip must not promise a recovery that is never coming.
 const REPORT_ONLY_KINDS = new Set(['loss_plateau', 'representation_collapse']);
 function isReportOnly(kind) { return REPORT_ONLY_KINDS.has(kind); }
+
+// Whether a detected failure will actually be followed by an intervention.
+// Two ways it will not be: the kind is report-only, or the run is the baseline
+// arm, where INTERVENTIONS_ENABLED is false and every failure is recorded and
+// none acted on. The strip used to promise "attempting rollback" in both cases,
+// and the red overlay is only cleared by an `intervention` event -- so a run
+// with no intervention coming stayed washed red for the rest of the run.
+let runIsBaseline = false;
+function interventionExpected(kind) { return !isReportOnly(kind) && !runIsBaseline; }
 function shortAction(action) {
   if (action === 'rollback_and_reduce_lr') return 'rollback + LR';
   if (action === 'reduce_lr') return 'LR down';
@@ -1313,6 +1322,7 @@ function handleMessage(msg) {
       updateStatus('running', 'RUNNING');
 
       const isBaseline = msg.mode === 'baseline';
+      runIsBaseline = isBaseline;
       document.getElementById('mode-badge').style.display = isBaseline ? 'inline-flex' : 'none';
       document.getElementById('degraded-badge').style.display = 'none';
       document.getElementById('unrecoverable-banner').classList.remove('visible');
@@ -1332,6 +1342,37 @@ function handleMessage(msg) {
       updateRatios.length = 0; gradFlowRatios.length = 0;
       failures.length = 0; interventions.length = 0;
       window._arcAdvancedWarned = false;
+      // Reset everything a second run in the same webview would otherwise
+      // inherit. The panel is reused across runs, so anything not cleared here
+      // is run 1's state presented as run 2's -- which the challenge's
+      // "clearly show current status" requirement makes a correctness issue,
+      // not a cosmetic one.
+      window._arcNonfinite = {};
+      // Priced from the `environment` event. A run that dies before emitting
+      // one (bad interpreter, torch import failure) would otherwise be costed
+      // at the previous run's GPU rate and labelled with its hardware.
+      gpuRate = DEFAULT_GPU_RATE;
+      gpuRateSource = 'generic cloud GPU estimate — set arcAgent.gpuHourlyRate for your actual cost';
+      gpuWatts = DEFAULT_GPU_WATTS;
+      // A zoom from the previous run left the charts not following live data.
+      isAutoScrolling = true;
+      // The tiles are read back as well as written: the loss delta is computed
+      // against whatever #val-loss holds, so a stale value produced a delta
+      // measured across two different runs.
+      document.getElementById('val-loss').textContent = '0.000';
+      document.getElementById('val-loss-diff').textContent = '-';
+      document.getElementById('val-loss-diff').className = 'metric-subtext';
+      document.getElementById('val-grad').textContent = '0.000';
+      document.getElementById('val-lr').textContent = '0.00e0';
+      document.getElementById('val-gpu').textContent = 'GPU Memory: 0 MB';
+      document.getElementById('val-step').textContent = '0';
+      document.getElementById('val-epoch').textContent = '0';
+      document.getElementById('val-risk').textContent = 'LOW';
+      document.getElementById('val-risk').style.color = 'var(--accent-green)';
+      document.getElementById('val-risk-score').textContent = 'score 0.00';
+      updateRiskGauge(0, 'var(--accent-green)');
+      updateSparkline('spark-loss', [], 'var(--accent-blue)');
+      updateSparkline('spark-grad', [], 'var(--accent-blue)');
       runStartTime = Date.now();
       document.getElementById('ledger-card').classList.remove('active');
 
@@ -1488,7 +1529,11 @@ function handleMessage(msg) {
 
     case 'failure_detected':
       updateStatus('critical', 'FAILURE');
-      document.getElementById('alert-overlay').classList.add('active');
+      if (interventionExpected(msg.kind)) {
+        // Only the `intervention` handler clears this, so latching it when no
+        // intervention is coming leaves the chart permanently red.
+        document.getElementById('alert-overlay').classList.add('active');
+      }
       failures.push({ step: msg.step, kind: msg.kind || 'numerical' });
       addLogEntry('failure', 'failure',
         `[Step ${msg.step}] ${shortKind(msg.kind)} — ${msg.reason || 'failure signature detected'}`);
@@ -1502,7 +1547,9 @@ function handleMessage(msg) {
         current: 'Anomaly',
         next: isReportOnly(msg.kind)
           ? 'Reporting only — no intervention is known to help this failure'
-          : 'Attempting rollback / learning-rate reduction'
+          : runIsBaseline
+            ? 'Baseline arm — interventions suppressed, failure recorded only'
+            : 'Attempting rollback / learning-rate reduction'
       }, /* urgent */ true);
       break;
 
@@ -1599,13 +1646,21 @@ function handleMessage(msg) {
 
     case 'status':
       if (msg.status === 'complete') { updateStatus('idle', 'COMPLETED'); updateStrip({ status: 'Completed', current: 'Idle', next: 'Review the run in Export Report' }); resetStopButtons(); }
-      else if (msg.status === 'stopped') { updateStatus('idle', 'STOPPED'); updateStrip({ status: 'Stopped', current: 'Idle', next: 'Start a new run when ready' }); resetStopButtons(); }
+      else if (msg.status === 'stopped') { updateStatus('warning', 'STOPPED'); updateStrip({ status: 'Stopped', current: 'Idle', next: 'Start a new run when ready' }); resetStopButtons(); }
       else if (msg.status === 'running') { updateStatus('running', 'RUNNING'); updateStrip({ status: 'Running' }); }
       else if (msg.status === 'error') { updateStatus('critical', 'ERROR'); updateStrip({ status: 'Error', current: 'Idle', next: 'Check the action log below for details' }, true); resetStopButtons(); }
       break;
 
     case 'done':
-      if (msg.exitCode === 0) {
+      if (msg.stopped) {
+        // A run the user killed is neither completed nor failed. Reading
+        // exitCode alone recorded it as COMPLETED, because a deliberate
+        // SIGTERM exits 0 -- so a run that was cut short was reported, and
+        // exported, as a successful one.
+        updateStatus('warning', 'STOPPED');
+        addLogEntry('info', 'intervention', msg.message || 'Training stopped by user.');
+        updateStrip({ status: 'Stopped', outcome: msg.message || 'Training stopped by user.', current: 'Idle', next: 'Re-run, or review the partial run in Export Report' });
+      } else if (msg.exitCode === 0) {
         updateStatus('idle', 'COMPLETED');
         addLogEntry('info', 'intervention', msg.message || 'Training completed.');
         updateStrip({ status: 'Completed', outcome: msg.message || 'Training completed.', current: 'Idle', next: 'Review the run in Export Report' });
