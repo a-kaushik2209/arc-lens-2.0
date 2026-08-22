@@ -2,7 +2,10 @@
 
 **Team Heisen-bug (U333WKR8) · Challenge #171: Accessibility — Resource Waste Reduction**
 
-~1,350 words. 7.5–8 minutes. Slide cues in brackets — not spoken.
+~1,560 words. 8–8.5 minutes at a normal pace. Slide cues in brackets — not spoken. If your slot
+is 7 minutes, cut the 3:00 demo-config beat (fold one sentence of it into 0:50) and tighten the
+Q&A caveat at 3:25 to one sentence — that recovers ~45s without losing a beat the rubric table
+depends on.
 
 Every number traces to `docs/WASTE_REDUCTION.md`, with the method that produced it.
 
@@ -156,10 +159,16 @@ exported incident report.
 Then we audited every number the dashboard displays, and labelled each one *measured*, *derived*
 or *estimated*, on screen.
 
-That audit found four fabrications. The worst: when a risk score was absent, the gauge rendered
+That audit found five fabrications. The worst: when a risk score was absent, the gauge rendered
 `0.00` — which reads as **safe**. On a gauge whose entire job is saying when a run is not safe,
 that's fabricating in the one direction that matters. Fixed, and the test now checks the field's
 presence rather than its truthiness, because zero is a legitimate value for lr and GPU memory.
+
+One more, found the same way: the learning-rate and gradient-norm charts sit on a log axis, and
+our own demo's schedule computes a learning rate of exactly zero at the first step and the last
+step of every run. Log of zero is undefined, so the chart didn't plot it low — it silently
+dropped the point, on stage, at both ends of the exact run we demo. Fixed the same way: filtered
+before it reaches the axis, so a missing point reads as a gap, not a floor value we made up.
 
 Dollar and energy figures are labelled estimates every time they appear. An unlabelled dollar
 amount would be the same class of problem.
@@ -175,7 +184,8 @@ real training loops end to end. Several were written before the code they cover 
 bugs doing it, including one where an optimizer was matched to a wrapper module instead of the
 submodule it updates — that would have rolled back both halves of a GAN. CI fails the build on
 any secret-shaped literal. LLM features are bring-your-own-key, so no credential and no token
-cost sits on our side.
+cost sits on our side. And it's not just tested on the machine that wrote it — it's packaged and
+installed clean on a second one.
 
 Against the field: W&B alerts. Comet watches deployed models for drift. Lightning's
 `EarlyStopping` stops the run. Composer restarts the whole job after a hardware fault. None of
@@ -210,17 +220,17 @@ Where each judging parameter gets hit. If a beat gets cut for time, check what i
 
 | Parameter | Beat | Carried by |
 |:---|:---|:---|
-| Task implementation | 3:00, 4:05, 5:15 | Compute preserved, telemetry −72%, a11y 87→100, the four required states named |
+| Task implementation | 3:25, 4:30, 5:40 | Compute preserved, telemetry −72%, a11y 87→100, the four required states named |
 | Task complexity | 1:45 | Optimizer-level patch, in-process rollback against a live scheduler, GAN/AMP/accumulation correctness |
-| Technical execution | 6:10 | 136 tests, ten end-to-end, TDD-found GAN bug, CI secret scan |
-| Innovation & creativity | 0:50, 4:05, 6:10 | Acts instead of alerting; legibility reframed as the waste reduction |
-| Functionality & reliability | 3:00, 5:15 | +36.6 points on a seeded A/B; unrecoverable verdict instead of infinite retry |
-| Documentation & presentation | 5:15, 7:00 | On-screen provenance for every figure; every sweep published, withdrawals included |
+| Technical execution | 6:35 | 136 tests, ten end-to-end, TDD-found GAN bug, CI secret scan, built clean on a second machine |
+| Innovation & creativity | 0:50, 4:30, 6:35 | Acts instead of alerting; legibility reframed as the waste reduction |
+| Functionality & reliability | 3:25, 5:40 | +36.6 points on a seeded A/B; unrecoverable verdict instead of infinite retry |
+| Documentation & presentation | 5:40, 7:25 | On-screen provenance for every figure — five fabrications found and fixed; every sweep published, withdrawals included |
 | Architecture | 1:45 | Three tiers, one measurement anchor |
-| Code quality | 5:15, 6:10 | Tests written first; the fabrication audit and its regression tests |
-| User experience | 0:50, 4:05 | One button, zero code changes, named cause and named fix |
-| Scalability | 4:05, 6:10 | Adaptive telemetry, checkpoint byte budget, 1.8% overhead, BYOK zero token cost |
-| Technical sophistication | 1:45, 7:00 | The anchor choice, and the A/B methodology that deleted our own rules |
+| Code quality | 5:40, 6:35 | Tests written first; the fabrication audit (including a log-axis chart bug) and its regression tests |
+| User experience | 0:50, 4:30 | One button, zero code changes, named cause and named fix |
+| Scalability | 4:30, 6:35 | Adaptive telemetry, checkpoint byte budget, 1.8% overhead, BYOK zero token cost |
+| Technical sophistication | 1:45, 7:25 | The anchor choice, and the A/B methodology that deleted our own rules |
 
 ---
 

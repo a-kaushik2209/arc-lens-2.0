@@ -269,13 +269,18 @@ assertive only on failure, a data-table equivalent behind every canvas chart, `f
 what it announces is useful in sequence. That gap is documented.
 
 **Then we audited every figure the dashboard displays** and labelled each one *measured*,
-*derived* or *estimated* — on screen, in the page itself. **The audit found four fabrications**,
+*derived* or *estimated* — on screen, in the page itself. **The audit found five fabrications**,
 all of the same pattern:
 
 - an absent `lr` rendered `0.00e0`; an absent `gpu_mem_mb` rendered `0.0 MB`
 - **an absent risk score rendered `0.00` — which reads as *safe*.** On a gauge whose entire job
   is saying when a run is *not* safe, that's fabricating in the one direction that matters.
 - the telemetry tile displayed a number with no stated basis and could over-report without bound
+- **the learning-rate and gradient-norm charts sit on a log axis, and the demo's own cosine
+  schedule computes `lr = 0` at the first step and the last of every single run.** `log(0)` is
+  undefined, so the chart didn't show a low point there — it silently dropped the point, which
+  looks identical to a rendering bug on stage. Fixed by filtering non-positive values before they
+  reach a log axis rather than plotting a floor value, so the gap reads as absent, not invented.
 
 All fixed. The tests now check a field's **presence**, not its truthiness — because zero is a
 legitimate value for `lr` (cosine schedules end there) and for GPU memory (CPU runs report 0).
@@ -347,7 +352,8 @@ continue.* They alert, they stop, or they restart the whole job after a hardware
   **programmatically injected** failures, measured **by us**, on CPU. "100% on injected failures"
   is a different claim from "100% on real runs at scale", and we make only the first.
 - **CI fails the build on any secret-shaped literal** in source.
-- `arc-training` is live on PyPI; ARC Lens `0.3.9` is packaged and submission-ready.
+- `arc-training` is live on PyPI; ARC Lens `0.3.9` is packaged and submission-ready — built and
+  installed clean on a second machine, not just the one it was written on.
 
 **Do not put "zero false positives" on this slide.** Two of our own detection rules were deleted
 *for* false positives on healthy runs. The stronger story is that we caught them.
