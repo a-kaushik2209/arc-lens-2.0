@@ -193,7 +193,7 @@ header {
 .risk-progress-bar { width: 100%; height: 3px; background: var(--grid-line); border-radius: 2px; margin-top: 8px; overflow: hidden; }
 .risk-progress-fill { height: 100%; width: 0%; background: var(--accent-green); transition: width 0.3s ease, background-color 0.3s ease; }
 
-/* Compute-savings ledger â€” appears on the first intervention */
+/* Compute-savings ledger — appears on the first intervention */
 .ledger-card {
   background: linear-gradient(135deg, rgba(34, 197, 94, 0.08), rgba(34, 197, 94, 0.02));
   border: 1px solid rgba(34, 197, 94, 0.25);
@@ -365,7 +365,7 @@ header {
         <div class="ledger-stat-label">Compute Not Re-Spent</div>
       </div>
     </div>
-    <div class="ledger-detail" id="ledger-detail">â€”</div>
+    <div class="ledger-detail" id="ledger-detail">—</div>
   </div>
 
   <div class="charts-grid">
@@ -466,7 +466,7 @@ function exportReport() { if (vscode) vscode.postMessage({ command: 'exportRepor
 
 const degradedComponents = new Set();
 
-// â”€â”€ Telemetry history â€” index-aligned with `steps`; null means "no data at this step", never fabricated â”€â”€
+// ── Telemetry history — index-aligned with `steps`; null means "no data at this step", never fabricated ──
 const MAX_DATAPOINTS = 100000;
 const steps = [];
 const losses = [];
@@ -483,12 +483,12 @@ const interventions = [];
 // script, kept across runs so the active arm can be drawn against it.
 let baselineSeries = [];
 
-// â”€â”€ Compute-savings ledger â”€â”€
+// ── Compute-savings ledger ──
 //
 // The rate is derived from the GPU the run actually reported, rather than a
 // single hardcoded number that is wrong for everyone. It is still an on-demand
 // list price, not this user's bill, so the source is always shown next to the
-// figure â€” an unlabelled dollar amount would be the same fabrication problem as
+// figure — an unlabelled dollar amount would be the same fabrication problem as
 // an unlabelled metric.
 const GPU_RATE_TABLE = [
   [/h100/i,            3.50, 'H100 on-demand list'],
@@ -502,7 +502,7 @@ const GPU_RATE_TABLE = [
 const DEFAULT_GPU_RATE = 1.00;
 
 let gpuRate = DEFAULT_GPU_RATE;
-let gpuRateSource = 'generic cloud GPU estimate â€” set arcAgent.gpuHourlyRate for your actual cost';
+let gpuRateSource = 'generic cloud GPU estimate — set arcAgent.gpuHourlyRate for your actual cost';
 let runStartTime = null;
 
 function applyGpuRate(gpuName, configuredRate) {
@@ -513,7 +513,7 @@ function applyGpuRate(gpuName, configuredRate) {
   }
   if (!gpuName) {
     gpuRate = DEFAULT_GPU_RATE;
-    gpuRateSource = 'no GPU detected â€” generic estimate';
+    gpuRateSource = 'no GPU detected — generic estimate';
     return;
   }
   for (const [pattern, rate, label] of GPU_RATE_TABLE) {
@@ -572,7 +572,7 @@ function escapeText(v) {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-// â”€â”€ Theme â”€â”€
+// ── Theme ──
 function themeColors() {
   const cs = getComputedStyle(document.body);
   return {
@@ -595,7 +595,7 @@ function toggleTheme() {
   applyThemeToCharts();
 }
 
-// â”€â”€ ECharts setup â”€â”€
+// ── ECharts setup ──
 // Charts are keyed by name; each entry holds the instance plus the series-building
 // function so a theme change or data update can rebuild its option consistently.
 const charts = {};
@@ -722,7 +722,7 @@ function buildOption(name, colors) {
       series: [
         { ...seriesBase, name: 'Loss', yAxisIndex: 0, data: pairs(losses), color: '#3b82f6', markLine: markLineFor(colors), markArea: markAreaFor(colors) },
         // The control arm of the A/B, when one has been recorded. Same script,
-        // same seed, interventions suppressed â€” so the gap between the two
+        // same seed, interventions suppressed — so the gap between the two
         // curves is caused by ARC and nothing else.
         ...(baselineSeries.length ? [{
           ...seriesBase, name: 'Loss (baseline, no ARC)', yAxisIndex: 0,
@@ -808,7 +808,7 @@ function updateEmptyNotes() {
   document.getElementById('empty-flow').classList.toggle('visible', steps.length > 0 && !hasFlow);
 }
 
-// â”€â”€ Zoom / pan / reset â”€â”€
+// ── Zoom / pan / reset ──
 let isAutoScrolling = true;
 let _programmaticZoom = false;
 
@@ -867,7 +867,7 @@ function downloadChart(name) {
   }
 }
 
-// â”€â”€ Sparklines on the stat tiles â”€â”€
+// ── Sparklines on the stat tiles ──
 const sparklines = {};
 function initSparklines() {
   ['spark-loss', 'spark-grad'].forEach(id => {
@@ -891,7 +891,7 @@ function updateSparkline(id, values, color) {
   c.setOption({ series: [{ data: recent, color }] });
 }
 
-// â”€â”€ Action log + thought pacing (unchanged behavior) â”€â”€
+// ── Action log + thought pacing (unchanged behavior) ──
 const thoughtQueue = [];
 let thoughtRevealTimer = null;
 function enqueueThought(phase, message) {
@@ -995,7 +995,7 @@ function handleMessage(msg) {
       gradFlowRatios.push(adv.grad_flow_ratio ?? null);
       if (!hasAdvanced && !window._arcAdvancedWarned) {
         window._arcAdvancedWarned = true;
-        addLogEntry('info', 'intervention', 'Advanced diagnostics unavailable â€” install arc-training for effective rank, entropy, and update-ratio tracking.');
+        addLogEntry('info', 'intervention', 'Advanced diagnostics unavailable — install arc-training for effective rank, entropy, and update-ratio tracking.');
       }
 
       if (steps.length > MAX_DATAPOINTS) {
@@ -1058,7 +1058,7 @@ function handleMessage(msg) {
       document.getElementById('alert-overlay').classList.add('active');
       failures.push({ step: msg.step, kind: msg.kind || 'numerical' });
       addLogEntry('failure', 'failure',
-        `[Step ${msg.step}] ${shortKind(msg.kind)} â€” ${msg.reason || 'failure signature detected'}`);
+        `[Step ${msg.step}] ${shortKind(msg.kind)} — ${msg.reason || 'failure signature detected'}`);
       window.chartsNeedUpdate = true;
       break;
 
