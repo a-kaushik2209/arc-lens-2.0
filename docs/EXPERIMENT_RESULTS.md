@@ -78,8 +78,10 @@ norm above 50. That is the whole list.
 
 Four structural rules have been built and none of them survives with the power to act. Two —
 weight update ratio and gradient entropy — fired on healthy runs and were deleted (§3, §4). The
-other two, loss plateau and representation collapse, detect real failures correctly but their
-responses were measured making those failures worse, and are now report-only (§2, §4b). They
+other two, loss plateau and representation collapse, detect real failures correctly, but no
+measurement shows their responses helping and two sweeps showed failing runs ending far worse
+with them applied. They are report-only (§2, §4b), and §4c explains why that call does not rest
+on the size of those deltas — at these learning rates a single pair cannot attribute one. They
 still detect, chart and report; they do not steer the run.
 
 <!-- RESULTS_TABLE -->
@@ -208,18 +210,24 @@ which is what the progress guard was added to achieve. The `lr=0.5` pair did not
 **Delta: −63.19pp, in ARC's disfavour, from a detection that was entirely correct.** Both arms
 really were pinned at chance for four solid epochs; there was nothing wrong with the diagnosis.
 
-The mechanism is visible in the LR column. The baseline's cosine schedule walked the learning
-rate down on its own, and somewhere around 2.5e-01 the run escaped the dead region and climbed
-to 73%. The active arm had been cut to 3.2e-02 by that point and never escaped. Large steps
-were the only thing that could carry the weights out — reducing the learning rate at the moment
-of the plateau is precisely the wrong move, because it removes the one mechanism that was going
-to fix it.
+> **Withdrawn as a causal claim — see §4c.** A later sweep produced a 62.58pp gap on this same
+> configuration with *no* intervention in either arm. The number below is real; the attribution
+> to ARC is not established. The conclusion drawn from it — that the rule should report and not
+> act — survives, for a stronger reason.
 
-This is **not** the run-to-run variance discussed in §5. A 63-point gap is inside the spread
-that unstable learning rates can produce, so magnitude alone would not settle it — but the
-epoch trace does. The baseline's recovery is driven by a deterministic cosine schedule and is
-visible arriving over epochs 5–10, and the intervened arm's LR is an order of magnitude below
-the value at which the escape happened. The causal path is legible, not inferred from the delta.
+The proposed mechanism was visible in the LR column. The baseline's cosine schedule walked the
+learning rate down on its own, and somewhere around 2.5e-01 the run escaped the dead region and
+climbed to 73%. The active arm had been cut to 3.2e-02 by that point and never escaped. The
+reading at the time was that large steps were the only thing that could carry the weights out,
+so reducing the learning rate at the moment of the plateau removes the one mechanism that was
+going to fix it.
+
+That reading is plausible and it is not proven. It was argued here that the epoch trace
+established causation where the magnitude alone could not — a deterministic schedule driving a
+visible recovery over epochs 5–10, against an intervened arm an order of magnitude below the
+escape value. §4c shows why that was not enough: the same configuration, with nothing
+intervening in either arm, splits by 62.58 points. Escape at this learning rate is bistable, and
+a single pair cannot tell a bad intervention from a bad coin flip.
 
 So `loss_plateau` is now **report-only**: it detects, it says so, and it changes nothing.
 
@@ -383,7 +391,7 @@ than merely that something fired.
 
 ---
 
-## 4b. The rank rule fired for the first time, and cost 44 points
+## 4b. The rank rule fired for the first time, and the arm that acted lost 44 points
 
 The sweep run to *confirm* the plateau fix found the same defect in the last structural rule
 that could still act. This is the shipped sweep — the one in `experiment_ab.json`.
@@ -411,8 +419,12 @@ rolled back and cut three times:
 | 5 | 28.32%, lr 2.56e-01 | 21.44%, lr **3.20e-02** |
 | 10 | **75.18%** | **30.84%** |
 
-The mechanism is identical to §2's plateau finding, which is what makes it worth reporting
-rather than filing as a one-off. The control arm sat at chance for three epochs and escaped
+> **Withdrawn as a causal claim — see §4c**, on the same grounds as §2's: the following sweep
+> split this configuration by 62.58 points with no intervention in either arm.
+
+The mechanism proposed was identical to §2's plateau finding, which is what made it look like a
+pattern rather than a one-off — and that remains the best argument for the conclusion, just not
+for the number. The control arm sat at chance for three epochs and escaped
 when cosine decay lowered the learning rate on its own. The intervened arm was cut to an order
 of magnitude below the value at which that escape happened, and never got back. The rollback
 contributes nothing either: every checkpoint in the ring is from inside the collapsed region,
@@ -437,6 +449,63 @@ seed, same data order, same code. That is the run-to-run variance described in �
 full force, and it is the reason the `0.00pp` delta on that row is the honest number to quote
 rather than evidence of anything. The `−44.34pp` row is different in kind: the two arms diverge
 *within* the run, at the step the intervention lands, and the per-epoch trace shows it.
+
+---
+
+## 4c. The correction: that delta was not attributable
+
+The sweep run to confirm §4b's fix produced the most important result in this document, and it
+goes against §2 and §4b.
+
+With **both** structural rules report-only, no arm in the sweep intervened at all — the fix
+works. And the `lr=0.5` pair still split:
+
+| epoch | baseline | active |
+| ---: | :--- | :--- |
+| 2 | train_loss 2.3110, 10.00% | train_loss 2.3110, 10.00% |
+| 3 | train_loss 2.3105, 10.00% | train_loss 2.3105, 10.00% |
+| 4 | train_loss 2.3098, 10.00% | train_loss 2.3098, 10.00% |
+| 5 | **2.1726, 21.07%** | 2.3091, 10.00% |
+| 10 | **72.58%** | **10.00%** |
+
+Identical code, identical seed, identical data order, nothing intervening in either arm, and
+their first four epochs agree to four decimal places. Then one escaped the dead region and the
+other never did — **62.58 points apart, from floating-point nondeterminism alone.**
+
+**So the −63.19pp and −44.34pp deltas in §2 and §4b are withdrawn as measurements of ARC's
+effect.** They are real numbers from real runs and the per-epoch traces really do show the
+intervened arms sitting far below the learning rate at which the control escaped. But a gap of
+the same magnitude occurs with no intervention at all, so a single seeded pair cannot separate
+the two explanations. Every `lr=0.5` arm run to date:
+
+| sweep | arm | interventions | escaped? | final |
+| :--- | :--- | ---: | :--- | ---: |
+| 3 | baseline | 0 | yes | 73.19% |
+| 3 | active | 3 (`reduce_lr`) | no | 10.00% |
+| 5 | baseline | 0 | yes | 75.18% |
+| 5 | active | 3 (`rollback_and_reduce_lr`) | partly | 30.84% |
+| 6 | baseline | 0 | yes | 72.58% |
+| 6 | active | 0 | **no** | 10.00% |
+
+Three of four untouched runs escaped and neither intervened run did, which is *consistent with*
+the responses hurting and *not sufficient to establish it*.
+
+**This strengthens the report-only decision rather than weakening it.** At the learning rates
+where an intervention would matter, the run-to-run spread is larger than any effect a single
+pair can measure — so a response cannot be validated this way at all, in either direction.
+Letting a rule act on evidence that cannot exist yet is precisely the mistake this document
+records four times.
+
+What it would take: `python/repeatability.py --lr 0.5 --repeats N`, reported as a distribution
+rather than a pair. That has not been run, and nothing here depends on it.
+
+The false-positive fix is untouched by this. It was measured across six healthy arms in two
+independent sweeps, and the rule stayed silent in every one.
+
+**§5 predicted this exactly** — "the regime where interventions matter is by definition near the
+edge of stability, and that is precisely where tiny numerical differences amplify." It was
+written before the run that demonstrated it, and it was still not enough to stop a causal claim
+being made from a single pair. That is the more useful lesson than the number.
 
 ---
 

@@ -605,10 +605,12 @@ times further away than a real collapse reached. `mean_effective_rank` is the SV
 weight matrices, and a network can emit a constant output while every weight matrix stays
 well-conditioned — it measures weight conditioning, not representational rank.
 
-**It is also report-only now**, because the one sweep in which it did fire showed its response
-doing the damage: at `lr=0.5` the control arm recovered to 75.18% while the arm it rolled back
-and cut three times finished at 30.84%. −44.34pp, the same mechanism as the plateau rule — the
-control escaped once cosine decay lowered the LR by itself, and the cut arm never did.
+**It is also report-only now.** In the one sweep where it fired, the arm that acted on it
+finished 44 points below the control (30.84% against 75.18%). The follow-up sweep showed that
+gap cannot be attributed to the intervention — the same configuration split by 62 points with
+nothing intervening in either arm — so the rule is report-only for the more durable reason:
+no measurement has ever shown its response helping, and at these learning rates a single A/B
+pair cannot show it either way.
 
 A related bug is fixed: baselines used to be captured *after* the 200-step warmup, so a run that
 died earlier had its reference measured on the corpse — the dead arm scored 99.72% of its own

@@ -46,28 +46,32 @@ its own record gets harder to beat and stalls grow without bound. No patience va
 What separates the cases is whether the run ever got anywhere — a dead run stalls having never
 improved (best/first = 0.888) while a converged one stalls having improved enormously (0.271).
 
-Then the four-learning-rate sweep went against the rule's *response*. It cut the learning rate
-on detection. At `lr=0.5` the control arm sat at chance for four epochs and then escaped on its
-own — cosine decay lowered the LR and it climbed to **73.19%** — while the arm ARC intervened
-on, cut an order of magnitude further, finished at **10.00%**. The detection was correct and
-the intervention cost 63 points. The rule now reports and takes no action.
+Then the sweeps went against the rule's *response*, twice. At `lr=0.5` the control arm sat at
+chance for several epochs and then escaped on its own — cosine decay lowered the LR and it
+climbed past 70% — while the arms ARC cut, an order of magnitude further down, finished at
+10.00% and 30.84%. The same pattern appeared in `representation_collapse`, the last structural
+rule still allowed to act.
 
-Then the same thing happened to the last structural rule that could still act. The sweep
-confirming the plateau fix caught `representation_collapse` doing it: at `lr=0.5` the control arm
-recovered to **75.18%** while the arm it rolled back and cut finished at **30.84%** — −44.34pp,
-the identical mechanism.
+**And then a third sweep showed those deltas cannot be attributed to ARC.** With nothing
+intervening in either arm, the same configuration still split **72.58% vs 10.00%** — identical
+code, identical seed, identical data order, agreeing to four decimals for four epochs before one
+escaped the dead region and the other never did. Escape at that learning rate is a coin flip
+decided by floating-point nondeterminism. Across every `lr=0.5` arm run: 3 of 4 untouched runs
+escaped, 0 of 2 intervened ones did — consistent with the responses hurting, nowhere near enough
+to establish it.
 
-**So no structural rule acts any more.** Every one that was given the power either fired on
-healthy runs or damaged failing ones. What still intervenes is unambiguous divergence
-(non-finite or exploded loss) and gradient explosion, both verified. The structural signals are
-still collected, charted, and reported when they trip — they are informative to a human reading
-a run — they just no longer get to act on their own.
+**So no structural rule acts any more**, and the reason is stronger than the deltas that
+prompted it: where an intervention would matter, the run-to-run spread is larger than any effect
+a single A/B pair can measure, so no response can be validated that way at all. Acting on
+evidence that cannot exist yet is the mistake this project keeps catching in itself. What still
+intervenes is unambiguous divergence — a non-finite or exploded loss — which also latches
+gradient clipping on when the gradient norm is high at that moment. Gradient explosion is not a
+trigger in its own right; see the note under *Interventions*. The structural signals are still
+collected, charted and reported when they trip — they are informative to a human reading a run —
+they just no longer get to steer it.
 
-**Detection is not the same as rescue, and the plateau rule is honest about it.** It takes no
-action, because neither response available survives measurement: the LR cut made a run 63 points
-worse, and confirming a stall takes 300 steps, by which point every checkpoint in the ring is
-already post-collapse. Reporting a silent failure instead of showing a green dashboard for 780
-steps is the claim — not recovery.
+Full record of every sweep, including the two killed mid-run and the withdrawn claims, in
+[`docs/SWEEP_LOG.md`](docs/SWEEP_LOG.md).
 
 ---
 

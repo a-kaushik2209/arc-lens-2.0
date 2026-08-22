@@ -107,8 +107,10 @@ Point at the four charts while it runs.
 > them used to trigger and we deleted both after measuring what they did to healthy runs."
 
 Do not claim the four signals catch failures a loss curve cannot show. One of them is wired to a
-trigger; it fires rarely, and when it did fire, acting on it cost 44 points of accuracy against
-the control arm — so it now reports without acting. The silent failure we *do* catch is a loss
+trigger; it fires rarely, and the one sweep where it fired, the arm that acted on it finished
+44 points below the control — so it now reports without acting. (Whether the intervention
+*caused* that is unresolved; a later sweep split the same setup by 62 points with no
+intervention at all.) The silent failure we *do* catch is a loss
 plateau, and that is read off the loss itself, not off these four. If a judge pushes, Q5 in
 `FAQ_JUDGES.md`, and it is a better story than the claim it replaced.
 
@@ -131,8 +133,7 @@ only two verified working. At `ARC_DEMO_LR=0.5` the run dies silently rather tha
 the marker you get is `loss_plateau` ("stalled" on the chart) at around step 316–330.
 `gradient_entropy_collapse` no longer exists — deleted after it took a healthy CIFAR-10 run from
 87.43% to chance — so do not build the talk track around it. `representation_collapse` still
-exists, fires rarely, and no longer acts — the one sweep where it fired, its rollback took a run
-that recovered to 75.18% on its own down to 30.84%. Do not promise it as a rescue.
+exists, fires rarely, and no longer acts. Do not promise it as a rescue.
 
 **If you demo the plateau, say what it does and does not do.** It reports the death; it does not
 reverse it. The run still finishes at 10.00%. Claiming a rescue here is the one thing that will
@@ -154,7 +155,10 @@ reaching for a marker that will not appear:
 > lr=0.5 arm the control sat at chance for four epochs and then escaped on its own — cosine
 > decay walked the LR down and it climbed to 73%. The arm we intervened on had already been
 > cut an order of magnitude below that and never escaped: 10%, all ten epochs. The detection
-> was right and the fix made it 63 points worse. So it reports now and touches nothing."
+> was right and the arm we cut finished 63 points lower. We then ran it again with nothing
+> intervening and got a 62-point split anyway — that learning rate is a coin flip. So we can't
+> claim the intervention caused it, and the rule reports now and touches nothing, because
+> nothing we have shows the response helping."
 >
 > It detects it — it does not save it, deliberately. Rolling back is no better: by the time 300
 > stalled steps confirm a plateau, every checkpoint we hold is already post-collapse. Neither
