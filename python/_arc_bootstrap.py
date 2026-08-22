@@ -73,6 +73,12 @@ def emit(event: dict) -> None:
     global _transport_open
     if not _transport_open:
         return
+    if event.get("type") == "metric" and _finished:
+        # finish() has already sent the final run_summary/status pair. A
+        # straggling optimizer.step() firing after that (e.g. from code that
+        # keeps training past the user's own finish() call) must not resume
+        # the metric stream once the run has been declared over.
+        return
     try:
         print(json.dumps(event), file=_stdout, flush=True)
     except (BrokenPipeError, OSError, ValueError):
@@ -136,6 +142,10 @@ INTERVENTIONS_ENABLED = MODE != "baseline"
 STEP_DELAY = _env_float("ARC_STEP_DELAY", 0.0)
 CHECKPOINT_EVERY = _env_int("ARC_CHECKPOINT_EVERY", 25)
 MAX_CHECKPOINTS = _env_int("ARC_MAX_CHECKPOINTS", 3)
+# Storage budget for the checkpoint ring buffer, independent of the count-based
+# MAX_CHECKPOINTS above. Whichever cap is tighter wins — see
+# CheckpointStore._recompute_effective_max.
+MAX_CHECKPOINT_MB = _env_float("ARC_MAX_CHECKPOINT_MB", 512.0)
 # Effective rank needs an SVD per layer. That is far too expensive to run every
 # step, and instability signatures develop over tens of steps anyway, so the
 # expensive collectors are sampled. Sampling goes dense automatically while risk
@@ -149,6 +159,11 @@ ADVANCED_EVERY = _env_int("ARC_ADVANCED_EVERY", 25)
 # The rate used while risk is elevated. Five times denser than normal, not
 # every step — see _should_sample_advanced for why that distinction matters.
 DENSE_ADVANCED_EVERY = max(1, _env_int("ARC_ADVANCED_EVERY_DENSE", max(1, ADVANCED_EVERY // 5)))
+# Same coalesce-while-healthy / densify-while-risky policy, applied to the
+# per-step `metric` event instead of the expensive collectors. Defaults to 1
+# (emit every step) so existing users see no change unless they opt in.
+METRIC_EVERY = _env_int("ARC_METRIC_EVERY", 1)
+DENSE_METRIC_EVERY = max(1, _env_int("ARC_METRIC_EVERY_DENSE", 1))
 LOSS_EXPLOSION_THRESHOLD = _env_float("ARC_LOSS_EXPLOSION", 1e6)
 COOLDOWN_STEPS = _env_int("ARC_COOLDOWN_STEPS", 15)
 
@@ -269,8 +284,15 @@ class CheckpointStore:
     def __init__(self, model, optimizer, max_checkpoints: int = 3) -> None:
         self.model = model
         self.optimizer = optimizer
-        self.snapshots: deque = deque(maxlen=max(1, max_checkpoints))
+        self.max_checkpoints = max(1, max_checkpoints)
+        # The effective bound, tightened once bytes_per_checkpoint is known and
+        # MAX_CHECKPOINT_MB turns out to be the stricter of the two caps. A
+        # plain list rather than deque(maxlen=...) because that bound has to
+        # move at runtime, and a deque's maxlen is fixed at construction.
+        self.effective_max = self.max_checkpoints
+        self.snapshots: list = []
         self.bytes_per_checkpoint = 0
+        self.pruned_count = 0
         self._warned_size = False
 
     @staticmethod
@@ -315,15 +337,20 @@ class CheckpointStore:
             # revisiting it understated the true cost by ~3x for Adam — the exact
             # "3 x model size" factor this class exists to avoid paying in VRAM.
             estimate = self.estimate_bytes()
-            if estimate > self.bytes_per_checkpoint:
+            grew = estimate > self.bytes_per_checkpoint
+            if grew:
                 self.bytes_per_checkpoint = estimate
-                self._report_budget()
+                self._recompute_effective_max()
             self.snapshots.append({
                 "step": step,
+                "time": time.time(),
                 "model": self._to_cpu(self.model.state_dict()),
                 "optimizer": self._to_cpu(self.optimizer.state_dict()),
                 "rng": self._rng_state(),
             })
+            if grew:
+                self._report_budget()
+            self._trim()
             self.failed = False
         except Exception as exc:
             # Say what is actually true. This used to report "Checkpointing
@@ -343,18 +370,52 @@ class CheckpointStore:
         self.snapshots.clear()
         self.collector = None
 
+    def _recompute_effective_max(self) -> None:
+        """Tighten the ring-buffer bound to whichever cap is stricter.
+
+        Called whenever bytes_per_checkpoint grows (it is only ever
+        re-estimated upward — see the comment in save()). MAX_CHECKPOINTS is a
+        count; MAX_CHECKPOINT_MB is a byte budget. The effective bound is
+        whichever produces fewer snapshots, and it never drops below 1 — a
+        single checkpoint beats none, even if that one checkpoint alone
+        exceeds the configured MB budget.
+        """
+        if self.bytes_per_checkpoint <= 0:
+            return
+        budget_count = int((MAX_CHECKPOINT_MB * 1_000_000) // self.bytes_per_checkpoint)
+        effective = max(1, min(self.max_checkpoints, budget_count))
+        if effective == 1 and budget_count < 1:
+            warn_once(
+                "checkpoint_budget_tight",
+                f"ARC_MAX_CHECKPOINT_MB={MAX_CHECKPOINT_MB:.0f} fits less than one "
+                f"{self.bytes_per_checkpoint / 1e6:.1f} MB checkpoint — rollback "
+                "capacity reduced to a single checkpoint.",
+            )
+        self.effective_max = effective
+
+    def _trim(self) -> None:
+        while len(self.snapshots) > self.effective_max:
+            self.snapshots.pop(0)
+            # Only count evictions the MB budget caused beyond what the
+            # count-based MAX_CHECKPOINTS ring buffer would have done on its
+            # own, so pruned_count reads as "what the byte budget cost you".
+            if self.effective_max < self.max_checkpoints:
+                self.pruned_count += 1
+
     def _report_budget(self) -> None:
-        total = self.bytes_per_checkpoint * self.snapshots.maxlen
+        total = self.bytes_per_checkpoint * self.effective_max
         emit({
             "type": "checkpoint_budget",
             "bytes_per_checkpoint": self.bytes_per_checkpoint,
-            "max_checkpoints": self.snapshots.maxlen,
+            "max_checkpoints": self.effective_max,
             "total_bytes": total,
+            "budget_mb": MAX_CHECKPOINT_MB,
+            "pruned_count": self.pruned_count,
             "location": "cpu",
         })
         emit_log(
             f"Checkpoint budget: {total / 1e6:.1f} MB host RAM "
-            f"({self.snapshots.maxlen} x {self.bytes_per_checkpoint / 1e6:.1f} MB, CPU-resident).",
+            f"({self.effective_max} x {self.bytes_per_checkpoint / 1e6:.1f} MB, CPU-resident).",
         )
 
     def restore(self, index: int = -1) -> int:
@@ -857,6 +918,21 @@ def _should_sample_advanced() -> bool:
     return STATE.step % ADVANCED_EVERY == 0
 
 
+def _should_emit_metric() -> bool:
+    """Coalesce the per-step `metric` event while healthy, densify under risk.
+
+    Mirrors `_should_sample_advanced` exactly. `METRIC_EVERY` defaults to 1,
+    which reproduces the previous behaviour of emitting every step. This gates
+    only the emit call — loss history and the risk score are computed every
+    step regardless, so risk detection is never delayed by coalescing.
+    """
+    if METRIC_EVERY <= 1 or STATE.step == 1:
+        return True
+    if STATE.risk >= 0.4:
+        return STATE.step % DENSE_METRIC_EVERY == 0
+    return STATE.step % METRIC_EVERY == 0
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # The measurement point
 # ─────────────────────────────────────────────────────────────────────────────
@@ -956,18 +1032,19 @@ def _on_optimizer_step_inner(optimizer) -> None:
     STATE.risk = risk
     emit({"type": "risk", "score": round(risk, 4), "label": label})
 
-    emit({
-        "type": "metric",
-        "step": step,
-        "epoch": STATE.epoch,
-        "loss": _finite(loss_val),
-        "grad_norm": round(grad_norm, 6),
-        "lr": lr,
-        "gpu_mem_mb": round(_gpu_mem_mb(), 1),
-        "optimizer": monitor.name if monitor else type(optimizer).__name__,
-        "timestamp": time.time(),
-        "advanced": advanced,
-    })
+    if _should_emit_metric():
+        emit({
+            "type": "metric",
+            "step": step,
+            "epoch": STATE.epoch,
+            "loss": _finite(loss_val),
+            "grad_norm": round(grad_norm, 6),
+            "lr": lr,
+            "gpu_mem_mb": round(_gpu_mem_mb(), 1),
+            "optimizer": monitor.name if monitor else type(optimizer).__name__,
+            "timestamp": time.time(),
+            "advanced": advanced,
+        })
 
     # Clipping runs after the metric is emitted, so the reported gradient norm is
     # the true pre-clip value — clipping is an intervention, and hiding its effect
@@ -1047,11 +1124,25 @@ def _handle_failure(optimizer, monitor, step, loss_val, grad_norm, lr, advanced,
     if attempts >= MAX_ATTEMPTS_PER_KIND:
         if kind not in STATE.abandoned_kinds:
             STATE.abandoned_kinds.add(kind)
+            last_snapshot = monitor.store.snapshots[-1] if (monitor is not None and monitor.store.snapshots) else None
+            if last_snapshot is not None:
+                elapsed_seconds = time.time() - last_snapshot["time"]
+                last_checkpoint_step = last_snapshot["step"]
+            else:
+                # No checkpoint exists yet (e.g. the model was never resolved).
+                # This is time since the run *started*, not since the last
+                # checkpoint — there isn't one — so it understates or overstates
+                # the true waste depending on how CHECKPOINT_EVERY compares to
+                # how long the run has been going. Best available fallback.
+                elapsed_seconds = time.time() - STATE.train_start
+                last_checkpoint_step = None
             emit({
                 "type": "unrecoverable",
                 "step": step,
                 "kind": kind,
                 "attempts": attempts,
+                "elapsed_seconds": round(elapsed_seconds, 3),
+                "last_checkpoint_step": last_checkpoint_step,
                 "message": (
                     f"{attempts} recovery attempts for '{kind}' did not restore healthy "
                     "training. Every retained checkpoint predates the collapse's onset or "

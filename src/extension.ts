@@ -278,8 +278,14 @@ async function resolveInterpreter(targetFile: string): Promise<string> {
   return resolvePythonPath("python3");
 }
 
-function ensureArcTrainingInstalled(pythonPath: string): Promise<boolean> {
-  if (shouldBypassArcCheck()) {
+/**
+ * Prompts for the missing arc-training package. `arcKnownPresent` lets a
+ * caller that already knows the answer (the preflight doctor's combined
+ * import check) skip re-running `import arc` in a second subprocess — the
+ * whole point of preflight running its checks in one shot.
+ */
+function ensureArcTrainingInstalled(pythonPath: string, arcKnownPresent?: boolean): Promise<boolean> {
+  if (shouldBypassArcCheck() || arcKnownPresent) {
     return Promise.resolve(true);
   }
   return new Promise((resolve) => {
@@ -324,6 +330,93 @@ function ensureArcTrainingInstalled(pythonPath: string): Promise<boolean> {
   });
 }
 
+/**
+ * The check script run inside the target interpreter. Combines the
+ * torch/arc import probe with a CUDA device query into one subprocess and
+ * one line of JSON, instead of the several round trips a naive version would
+ * need — this is what keeps preflight's added latency low.
+ */
+const PREFLIGHT_CHECK_SCRIPT = `
+import json
+result = {"torch": False, "arc": False, "cuda": False}
+try:
+    import torch
+    result["torch"] = True
+    result["torch_version"] = getattr(torch, "__version__", None)
+    if torch.cuda.is_available():
+        result["cuda"] = True
+        try:
+            result["cuda_device"] = torch.cuda.get_device_name(0)
+        except Exception:
+            pass
+except Exception:
+    pass
+try:
+    import arc
+    result["arc"] = True
+except Exception:
+    pass
+print(json.dumps(result))
+`.trim();
+
+/**
+ * Runs the torch/arc/CUDA probe and a syntax check on the target script in
+ * parallel, so a misconfigured environment or a broken script fails in
+ * ~2 seconds instead of after minutes of training reaching step 0.
+ */
+async function runPreflightChecks(
+  pythonPath: string,
+  targetFile: string
+): Promise<{
+  ok: boolean;
+  torch: boolean;
+  torchVersion?: string;
+  arc: boolean;
+  cuda: boolean;
+  cudaDevice?: string;
+  syntaxError?: string;
+}> {
+  const importCheck = new Promise<{ torch: boolean; torchVersion?: string; arc: boolean; cuda: boolean; cudaDevice?: string }>(
+    (resolve) => {
+      cp.execFile(pythonPath, ["-c", PREFLIGHT_CHECK_SCRIPT], (err, stdout) => {
+        if (err) {
+          // Interpreter couldn't even run the probe — treat as everything missing;
+          // the spawn() error handler downstream will surface the real reason.
+          resolve({ torch: false, arc: false, cuda: false });
+          return;
+        }
+        try {
+          const line = stdout.trim().split("\n").pop() ?? "{}";
+          const parsed = JSON.parse(line);
+          resolve({
+            torch: !!parsed.torch,
+            torchVersion: parsed.torch_version,
+            arc: !!parsed.arc,
+            cuda: !!parsed.cuda,
+            cudaDevice: parsed.cuda_device,
+          });
+        } catch {
+          resolve({ torch: false, arc: false, cuda: false });
+        }
+      });
+    }
+  );
+
+  const syntaxCheck = new Promise<string | undefined>((resolve) => {
+    cp.execFile(pythonPath, ["-m", "py_compile", targetFile], (err, _stdout, stderr) => {
+      resolve(err ? (stderr?.trim() || "Syntax error in training script.") : undefined);
+    });
+  });
+
+  const [imports, syntaxError] = await Promise.all([importCheck, syntaxCheck]);
+
+  return {
+    ok: !syntaxError && imports.torch,
+    ...imports,
+    syntaxError,
+  };
+}
+
 async function launchAgent(
   targetFile: string,
   context: vscode.ExtensionContext,
@@ -332,8 +425,25 @@ async function launchAgent(
   const config = vscode.workspace.getConfiguration("arcAgent");
   const pythonPath = await resolveInterpreter(targetFile);
 
-  // Check and install arc-training if missing
-  const shouldProceed = await ensureArcTrainingInstalled(pythonPath);
+  // Preflight: fail in ~2s on a bad interpreter/script instead of minutes
+  // into a training run reaching step 0.
+  const preflight = await runPreflightChecks(pythonPath, targetFile);
+
+  if (preflight.syntaxError) {
+    vscode.window.showErrorMessage(`ARC Lens: syntax error in ${path.basename(targetFile)} — ${preflight.syntaxError}`);
+    return;
+  }
+  if (!preflight.torch) {
+    vscode.window.showErrorMessage(
+      "ARC Lens: PyTorch not found in the selected interpreter. Install torch in this environment, or point arcAgent.pythonPath at one that has it."
+    );
+    return;
+  }
+  // CUDA absence is informational only — CPU-only is a supported mode.
+
+  // arc-training is a soft dependency: preflight already knows whether it's
+  // there, so this only prompts (no duplicate `import arc` subprocess).
+  const shouldProceed = await ensureArcTrainingInstalled(pythonPath, preflight.arc);
   if (!shouldProceed) {
     return;
   }
@@ -484,6 +594,7 @@ async function launchAgent(
   setTimeout(() => releasePendingMessages(), 800);
 
   const stepDelay: number = config.get("stepDelay") ?? 0;
+  const maxCheckpointMB: number = config.get("maxCheckpointMB") ?? 512;
   const runnerScript = path.join(context.extensionPath, "python", "runner.py");
 
   const env: NodeJS.ProcessEnv = {
@@ -491,6 +602,7 @@ async function launchAgent(
     PYTHONUNBUFFERED: "1",
     ARC_STEP_DELAY: stepDelay.toString(),
     ARC_MODE: mode,
+    ARC_MAX_CHECKPOINT_MB: maxCheckpointMB.toString(),
   };
 
   // ── Spawn the Python backend ───────────────────────────────────────────────

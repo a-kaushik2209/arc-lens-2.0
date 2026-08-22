@@ -105,8 +105,10 @@ function loadHelpers() {
   const wanted = [
     /const GPU_RATE_TABLE = \[[\s\S]*?\];/,
     /const DEFAULT_GPU_RATE = [^\n]+/,
+    /const DEFAULT_GPU_WATTS = [^\n]+/,
     /let gpuRate = [^\n]+/,
     /let gpuRateSource = [^\n]+/,
+    /let gpuWatts = [^\n]+/,
     /function applyGpuRate\([\s\S]*?\n\}/,
     /function escapeText\([\s\S]*?\n\}/,
     /const KIND_LABELS = \{[\s\S]*?\};/,
@@ -120,7 +122,7 @@ function loadHelpers() {
     assert.ok(match, `could not extract ${pattern}`);
     source += match[0] + "\n";
   }
-  source += "\nmodule.exports = { applyGpuRate, escapeText, shortKind, shortAction, RISK_COLORS, getRate: () => ({ gpuRate, gpuRateSource }) };";
+  source += "\nmodule.exports = { applyGpuRate, escapeText, shortKind, shortAction, RISK_COLORS, getRate: () => ({ gpuRate, gpuRateSource, gpuWatts }) };";
   const sandbox = { module: { exports: {} } };
   sandbox.exports = sandbox.module.exports;
   vm.createContext(sandbox);

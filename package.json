@@ -94,6 +94,11 @@
           "type": "string",
           "default": "google/gemini-2.5-flash:free",
           "description": "[Pro] OpenRouter model string to use for AI features."
+        },
+        "arcAgent.maxCheckpointMB": {
+          "type": "number",
+          "default": 512,
+          "description": "Maximum host RAM (in MB) the checkpoint ring buffer may use during a run. Oldest snapshots are pruned first when a new checkpoint would exceed this."
         }
       }
     }

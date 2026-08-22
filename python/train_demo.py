@@ -32,6 +32,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
+import data_cache
+
 SEED = int(os.environ.get("ARC_DEMO_SEED", "1234"))
 torch.manual_seed(SEED)
 torch.cuda.manual_seed_all(SEED)
@@ -44,7 +46,7 @@ BATCH_SIZE = int(os.environ.get("ARC_DEMO_BATCH", "128"))
 # a paper that used a different model, a different batch size and warmup.
 PEAK_LR = float(os.environ.get("ARC_DEMO_LR", "0.5"))
 WARMUP_STEPS = int(os.environ.get("ARC_DEMO_WARMUP", "60"))
-DATA_ROOT = os.environ.get("ARC_DEMO_DATA", os.path.join(os.path.dirname(__file__), "..", "data", "cifar"))
+DATA_ROOT = data_cache.cifar_root()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -102,6 +104,7 @@ def build_loaders():
     ])
 
     root = os.path.abspath(DATA_ROOT)
+    data_cache.warn_if_cache_incomplete(root)
     train = datasets.CIFAR10(root, train=True, download=True, transform=train_tf)
     test = datasets.CIFAR10(root, train=False, download=True, transform=test_tf)
 

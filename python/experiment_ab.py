@@ -32,6 +32,8 @@ import sys
 import time
 from pathlib import Path
 
+import data_cache
+
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
 
@@ -105,7 +107,7 @@ def main() -> int:
     parser.add_argument("--epochs", type=int, default=8)
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument("--script", default=str(HERE / "train_demo.py"))
-    parser.add_argument("--data-root", default=os.environ.get("ARC_DEMO_DATA", ""))
+    parser.add_argument("--data-root", default=data_cache.cifar_root())
     args = parser.parse_args()
 
     script = Path(args.script).resolve()
