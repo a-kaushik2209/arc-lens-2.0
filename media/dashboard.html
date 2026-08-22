@@ -1344,6 +1344,37 @@ function addLogEntry(type, badge, message) {
 // the user is deciding against is on screen while the decision is theirs.
 let wasteSince = null;
 let wasteTimer = null;
+let runMeterTimer = null;
+
+// Compute accounting is on screen from the first step, not only after a
+// failure. The challenge asks the experience to show what it is saving; a panel
+// that stays hidden until something goes wrong shows nothing on the runs where
+// the user is deciding whether to keep paying.
+function renderRunMeter() {
+  if (wasteSince !== null || runStartTime === null) return;  // detection takes over
+  const secs = (Date.now() - runStartTime) / 1000;
+  document.getElementById('ledger-time').textContent =
+    secs < 90 ? `${secs.toFixed(0)}s` : `${(secs / 60).toFixed(1)}m`;
+  document.getElementById('ledger-cost').textContent =
+    '$' + ((secs / 3600) * gpuRate).toFixed(4);
+}
+
+function startRunMeter() {
+  stopRunMeter();
+  document.getElementById('ledger-time-label').textContent = 'Compute This Run';
+  document.getElementById('ledger-cost-label').textContent = 'Cost So Far';
+  document.getElementById('ledger-detail').innerHTML =
+    `<span class="assumption">Priced at $${gpuRate.toFixed(2)}/hr ` +
+    `(${escapeText(gpuRateSource)}). ARC is watching for a failure worth ` +
+    `stopping for — if one is found, this becomes the cost of not stopping.</span>`;
+  document.getElementById('ledger-card').classList.add('active');
+  renderRunMeter();
+  runMeterTimer = setInterval(renderRunMeter, 1000);
+}
+
+function stopRunMeter() {
+  if (runMeterTimer !== null) { clearInterval(runMeterTimer); runMeterTimer = null; }
+}
 
 function stopWasteCounter() {
   if (wasteTimer !== null) { clearInterval(wasteTimer); wasteTimer = null; }
@@ -1362,6 +1393,7 @@ function renderWaste() {
 
 function startWasteCounter(step, kind, reportOnly) {
   if (wasteSince !== null) return;   // first detection owns the counter
+  stopRunMeter();
   wasteSince = Date.now();
   document.getElementById('ledger-time-label').textContent = 'Burned Since Detection';
   document.getElementById('ledger-cost-label').textContent = 'Cost Since Detection';
@@ -1419,6 +1451,7 @@ function handleMessage(msg) {
       // not a cosmetic one.
       window._arcNonfinite = {};
       stopWasteCounter();
+      stopRunMeter();
       document.getElementById('ledger-time-label').textContent = 'Training Preserved';
       document.getElementById('ledger-cost-label').textContent = 'Compute Not Re-Spent';
       document.getElementById('ledger-time').textContent = '0m';
@@ -1450,7 +1483,7 @@ function handleMessage(msg) {
       updateSparkline('spark-loss', [], 'var(--accent-blue)');
       updateSparkline('spark-grad', [], 'var(--accent-blue)');
       runStartTime = Date.now();
-      document.getElementById('ledger-card').classList.remove('active');
+      startRunMeter();
 
       document.getElementById('action-log-list').innerHTML = `<span style="color:var(--text-secondary);font-size:12px;margin:16px 0;">Run is stable.</span>`;
       logCount = 0;
@@ -1749,6 +1782,7 @@ function handleMessage(msg) {
       // Whatever the outcome, the run is over -- the waste counter must not keep
       // accruing against a process that is no longer burning anything.
       stopWasteCounter();
+      stopRunMeter();
       resetStopButtons();
       break;
 
