@@ -8,10 +8,11 @@ of a judge.
 extension that monkey-patches `Optimizer.step` in the user's process, streams loss /
 gradient norm / LR / GPU memory / effective rank / gradient entropy / weight-update-ratio to an
 in-editor webview dashboard over stdout JSON, and — on a **deterministic threshold rule**
-(NaN/Inf loss or `|loss| > 1e6`, grad norm > 50, effective rank below 50% of the run's own
-baseline) — rolls the live model back to the last checkpoint held in memory and cuts the
-optimizer's LR, in-process, without the user restarting the script. The entropy and
-update-ratio rules that used to be in that list are gone; see §2. The Pro tier adds a BYOK LLM chat that explains
+(NaN/Inf loss or `|loss| > 1e6`, grad norm > 50) — rolls the live model back to the last
+checkpoint held in memory and cuts the optimizer's LR, in-process, without the user restarting
+the script. No *structural* rule is allowed to act any more: the entropy and update-ratio rules
+were deleted, and the plateau and effective-rank rules were demoted to report-only after their
+responses were measured harming failing runs. See §2. The Pro tier adds a BYOK LLM chat that explains
 failures using run telemetry as context, and a script generator.
 
 ---
@@ -77,6 +78,9 @@ Two things are true and worth saying plainly:
    pitch whether to mention the MLP result at all — citing it without that caveat is the fastest
    way to lose credibility if probed.
 
+   Note that the live intervention path is now **only** the loss and gradient-norm tests. The
+   structural rules detect and report; none of them acts.
+
    The nuance worth volunteering, because it is the most credible thing here: there used to be
    three structural rules and there is now one, and both deletions were forced by measurement.
    The update-ratio rule's distribution overlapped almost completely between healthy and failing
@@ -92,10 +96,15 @@ Two things are true and worth saying plainly:
 
    Expect the follow-up "so what actually fires?" and answer it before it is asked: numerical
    divergence, which is verified working; gradient clipping; and a **loss-plateau** rule that
-   fires when the loss has not improved for 300 steps. That last one catches a run that is dead
-   but numerically healthy — measured at 82 stalled steps on a healthy run against 764 on a dead
-   one — but it detects rather than rescues, and the run it caught still ended at chance
-   accuracy. The rank rule has **never fired in validation** and demonstrably cannot catch that
+   fires when the loss has stalled for 300 steps *and* the run never improved past 60% of its
+   opening loss. That last one catches a run that is dead but numerically healthy — measured at
+   82 stalled steps on a healthy run against 764 on a dead one, with the progress condition added
+   after the patience-only version fired on a healthy 87.5% run — but it detects rather than
+   rescues, and it takes **no action at all**. That is measured, not missing: its original
+   response cut the learning rate, and on the `lr=0.5` A/B pair that turned a run which recovered
+   to 73.19% by itself into one that finished at chance. If a judge asks why a detector does
+   nothing, that answer is the strongest thing on this page. The rank rule has **never fired in
+   validation** and demonstrably cannot catch that
    case: a dead run only loses 12.6% of its effective rank against a 50% trigger. Presenting
    either as a proven rescue is the fastest way to lose the room.
 
@@ -107,10 +116,11 @@ user picks — none of them compute effective rank by default). That's a concret
 a judge can verify against the code, unlike "we do anomaly detection" (everyone in the table
 does some version of that).
 
-Say "targets", not "catches". The rank rule has never fired in any validation run we have,
-because the threshold sits at 50% of baseline while a healthy run bottoms at 97.2% and a dead one
-at 87.4% — it measures weight conditioning, not representational rank, and the two diverge
-precisely in this failure mode. The silent failure we *do* catch is a loss plateau, read off the
+Say "targets", not "catches". The rank rule fired for the first time in the latest sweep, and
+the arm it was allowed to act on went from a control-arm 75.18% to 30.84% — so it is now
+report-only, like the plateau rule. For most runs it does not fire at all: the threshold sits at
+50% of baseline while a healthy run bottoms at 97.2%, and it measures weight conditioning rather
+than representational rank. The silent failure we *do* catch is a loss plateau, read off the
 loss itself rather than off any structural signal.
 The claim that survives scrutiny is "we detect a silent failure and report it", not "we recover
 from one". We have caught exactly one class in a real run — a model that trained to chance
@@ -188,7 +198,8 @@ signals" is a research direction here, not a shipped advantage.
 **"Why not just use gradient clipping / `EarlyStopping(check_finite=True)`?"**
 Because clipping only addresses gradient-norm blowups (it does nothing for NaN loss that's
 already propagated, and nothing for representation collapse, which shows no gradient spike at
-all — while conceding that our rank rule for that case has never fired in validation), and
+all — while conceding that our rank rule for that case detects but no longer acts, because
+acting on it was measured to cost 44 points), and
 `EarlyStopping` **stops** the run rather than recovering it — the user still loses the
 run and has to manually restart, re-tune LR, and hope it doesn't recur. Both are real, standard,
 free tools already in every practitioner's toolbox — say so, don't pretend they don't exist.

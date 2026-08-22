@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import json
 import math
+import statistics
 import os
 import sys
 import time
@@ -200,6 +201,65 @@ LOSS_PLATEAU_PATIENCE = _env_int("ARC_PLATEAU_PATIENCE", 300)
 # A new best must beat the old one by this much to count. Guards against a
 # monotonically-but-uselessly improving loss ratcheting the counter forever.
 LOSS_PLATEAU_MIN_DELTA = _env_float("ARC_PLATEAU_DELTA", 0.001)
+# A plateau only counts as a failure if the run never got anywhere. Fires only
+# when best_loss / first_loss is *above* this — i.e. the run has improved by
+# less than 40% from its opening loss. Measured: a healthy run reaches 0.271, a
+# dead one 0.888. Set at 0.60, roughly midway in log terms and far from both.
+#
+# Without this guard the rule fires on convergence, because the best-ever-loss
+# counter makes stalls grow without bound as a run succeeds. A 10-epoch A/B
+# caught it firing twice on a run that reached 87.5%.
+LOSS_PLATEAU_PROGRESS_RATIO = _env_float("ARC_PLATEAU_PROGRESS", 0.60)
+# The opening reference is the median of this many early losses, not the single
+# first one. One batch is a sample of size one: an unlucky first batch reads high,
+# which would make a dead run look like it had improved and suppress a true
+# positive. The median of ten is stable against that at no meaningful cost.
+LOSS_PLATEAU_OPENING_SAMPLES = _env_int("ARC_PLATEAU_OPENING", 10)
+
+# Kinds ARC reports but never acts on.
+#
+# `loss_plateau` detects correctly and its only available response makes things
+# worse, so it is allowed to speak and not to touch the run. The four-LR A/B
+# measured the pair at lr=0.5 (seed 1234, 10 epochs, identical data order):
+#
+#     epoch    baseline (no action)     active (3x reduce_lr at step 316)
+#         1    10.00%  lr=4.91e-01      10.00%  lr=2.45e-01
+#         4     9.76%  lr=3.34e-01      10.00%  lr=4.18e-02
+#         5    26.73%  lr=2.56e-01      10.00%  lr=3.20e-02
+#        10    73.19%                   10.00%  loss 2.3026 = ln(10)
+#
+# The detection was right — the run really was pinned at chance for four
+# epochs. But the control arm escaped on its own once cosine decay walked the
+# LR down, and the arm ARC "helped" never did. Large steps were the only thing
+# that could carry the weights out of the dead region; cutting the LR at the
+# moment of the plateau removed them and locked the collapse in. Interventions
+# turned a run that recovered to 73% into one that finished at chance.
+#
+# So the rule reports. Acting again needs a measured trajectory showing some
+# action actually helps a plateaued run — the same bar every other rule here
+# has to clear. See docs/EXPERIMENT_RESULTS.md.
+#
+# `representation_collapse` is here for the same reason, found by the sweep that
+# confirmed the plateau fix. It was the last structural rule still allowed to
+# act, and it reproduced the defect exactly. At lr=0.5 (seed 1234, 10 epochs):
+#
+#     epoch    baseline (no action)     active (3x rollback_and_reduce_lr)
+#         3    10.00%  lr=4.04e-01      10.00%  lr=4.04e-01
+#         4    19.35%  lr=3.34e-01      10.00%  lr=3.34e-01
+#         5    28.32%  lr=2.56e-01      21.44%  lr=3.20e-02
+#        10    75.18%                   30.84%
+#
+# -44.34pp. Same mechanism as the plateau: the control arm escaped the dead
+# region once cosine decay lowered the learning rate by itself, and the arm ARC
+# cut sat an order of magnitude below that and never caught up. Rolling back
+# adds nothing either — the checkpoints in the ring are from the collapsed
+# region, which is where the model already is.
+#
+# The consequence is worth stating plainly: no structural rule is allowed to act
+# any more. Every one that was given the power either fired on healthy runs or
+# damaged failing ones. What still acts is numerical divergence and gradient
+# clipping, both of which are verified.
+REPORT_ONLY_KINDS = frozenset({"loss_plateau", "representation_collapse"})
 
 MAX_ATTEMPTS_PER_KIND = _env_int("ARC_MAX_ATTEMPTS", 3)
 # Upper bound on simultaneously tracked optimizers. Enough for a GAN or an
@@ -253,6 +313,13 @@ class _RunState:
         self.last_intervention_step = -10**9
         self.attempts_by_kind: dict[str, int] = {}
         self.abandoned_kinds: set[str] = set()
+        # Report-only kinds that have said their piece and stopped repeating.
+        # Kept apart from `abandoned_kinds` because that set is what the run
+        # summary publishes as "unrecoverable", and a report-only kind has no
+        # standing to make that claim — ARC never acted, so it has no evidence
+        # the run is beyond saving. The lr=0.5 control arm is the proof: it
+        # reported a plateau, took no action, and recovered to 73.19%.
+        self.silenced_kinds: set[str] = set()
         # Re-entrancy guard for nested optimizers; see the step wrapper.
         self.in_step = False
 
@@ -499,6 +566,7 @@ class OptimizerMonitor:
         # Loss-plateau state. Tracked per optimizer, not globally, so a GAN's
         # two optimizers plateau independently.
         self.best_loss = float("inf")
+        self.opening_losses: list[float] = []
         self.steps_without_improvement = 0
 
     # -- silent death ---------------------------------------------------------
@@ -529,6 +597,13 @@ class OptimizerMonitor:
         if math.isnan(loss_val) or math.isinf(loss_val):
             return None
 
+        # The reference for "did this run ever get anywhere", captured from the
+        # opening steps and then frozen. A median rather than the single first
+        # loss: one batch is a sample of size one, and an unlucky high first
+        # batch would make a dead run look like it had improved.
+        if len(self.opening_losses) < LOSS_PLATEAU_OPENING_SAMPLES:
+            self.opening_losses.append(loss_val)
+
         if loss_val < self.best_loss - LOSS_PLATEAU_MIN_DELTA:
             self.best_loss = loss_val
             self.steps_without_improvement = 0
@@ -539,13 +614,71 @@ class OptimizerMonitor:
             return None
 
         stalled = self.steps_without_improvement
-        # Reset before returning. Without this the rule re-fires on every
-        # subsequent step and the agent walks the learning rate to zero.
+        # Reset before returning, on every path. Without this the rule re-fires
+        # on every subsequent step and the agent walks the learning rate to zero.
         self.steps_without_improvement = 0
+
+        # A plateau on its own is not a failure — it is what convergence looks
+        # like. This guard is the whole difference between the two.
+        #
+        # The rule shipped without it and a 10-epoch A/B caught that immediately:
+        # a run that reached 87.5% validation accuracy tripped it twice. The
+        # counter keys off the *best-ever* batch loss, so as a run converges its
+        # own record gets harder to beat and the stalls grow without bound. On a
+        # 780-step run the healthy maximum was 82 steps; over 3900 steps a
+        # perfectly healthy run blows through any fixed patience. Raising the
+        # patience cannot fix that — the stall length is unbounded on a
+        # successful run, so there is no value that separates them.
+        #
+        # What separates them is whether the run ever got anywhere. Measured on
+        # the pair of runs this rule was built from:
+        #
+        #     arm                  first loss   best loss   best/first
+        #     lr=0.03  healthy        2.3018      0.6233       0.271
+        #     lr=0.50  dead           2.3221      2.0632       0.888
+        #
+        # A dead run stalls *having never improved*; a converged run stalls
+        # having improved enormously. That ratio is architecture- and
+        # task-independent in a way "loss near ln(num_classes)" is not — it needs
+        # no knowledge of the class count, or even that this is classification.
+        #
+        # Known limitation, stated rather than discovered: this assumes a run has
+        # substantial headroom from its opening loss. Fine-tuning a pretrained
+        # model does not — it can legitimately start at a low loss and converge
+        # after a 10% improvement, which reads as "never got anywhere" here and
+        # would trip the rule on a perfectly good run. Training from scratch is
+        # the case this is calibrated for. If ARC starts being used on
+        # fine-tuning workloads, this needs a different reference than the first
+        # observed loss, and it needs measuring on that workload rather than
+        # reasoning about it — which is the whole lesson of the two deleted rules
+        # and of this rule's own first version.
+        # ponytail: first-loss reference, revisit if fine-tuning runs appear.
+        opening = statistics.median(self.opening_losses) if self.opening_losses else 0.0
+
+        # A non-positive opening reference means the ratio is undefined, not that
+        # the run is healthy. A loss that starts at exactly 0.0 is degenerate —
+        # and dividing by it in the message below would raise ZeroDivisionError
+        # here, inside the path that runs while a failure is being handled. Report
+        # the stall without the progress figure rather than inventing one or
+        # throwing.
+        if opening <= 0:
+            return (
+                "loss_plateau",
+                f"loss has failed to improve on its best value of {self.best_loss:.4f} "
+                f"for {stalled} consecutive steps",
+            )
+
+        if self.best_loss / opening < LOSS_PLATEAU_PROGRESS_RATIO:
+            # This run has made real progress. Stalling now is convergence, and
+            # cutting the learning rate of a converged run is exactly the
+            # unhelpful intervention the deleted rules were deleted for.
+            return None
+
         return (
             "loss_plateau",
             f"loss has failed to improve on its best value of {self.best_loss:.4f} "
-            f"for {stalled} consecutive steps",
+            f"for {stalled} consecutive steps, having improved only "
+            f"{(1 - self.best_loss / opening) * 100:.1f}% from its opening loss",
         )
 
     # -- learning rate --------------------------------------------------------
@@ -634,12 +767,33 @@ class OptimizerMonitor:
                 ("effective_rank", weight_g, "mean_effective_rank"),
                 ("weight_update_ratio", weight_g, "mean_update_ratio"),
             )
+            diverged: list[str] = []
             for out_key, source, key in mapping:
                 if key not in source:
                     continue
                 value = _finite(source[key])
                 if value is not None:
                     advanced[out_key] = value
+                else:
+                    # The value exists and is not representable — inf or NaN.
+                    #
+                    # Refusing to put it in the JSON is right; silently dropping
+                    # the *fact* that it went non-finite is not. For
+                    # `grad_flow_ratio` the divergence is the diagnosis: the
+                    # upstream ratio is late-layer gradient norm over early, and
+                    # it returns inf exactly when the early layers stop receiving
+                    # gradient at all. Measured on a real pair of runs, the
+                    # healthy arm stayed inside 1.36-3.10 for every sample while
+                    # the dead arm hit 50.11 at step 50 and went non-finite from
+                    # step 75 onward — so the chart gap was the loudest signal in
+                    # the run, and it was being thrown away as unserialisable.
+                    #
+                    # Reported as a flag rather than a sentinel number, because a
+                    # stand-in value would be indistinguishable from a real
+                    # measurement on the chart.
+                    diverged.append(out_key)
+            if diverged:
+                advanced["nonfinite"] = diverged
             return advanced or None
         except Exception as exc:
             warn_once("collector_step", f"Advanced diagnostics degraded: {exc}")
@@ -1188,7 +1342,9 @@ def _on_optimizer_step_inner(optimizer) -> None:
         structural = monitor.check_plateau(loss_val) if loss_known else None
         if structural is None and advanced:
             structural = monitor.check_structural(advanced)
-        if structural is not None and structural[0] not in STATE.abandoned_kinds:
+        if (structural is not None
+                and structural[0] not in STATE.abandoned_kinds
+                and structural[0] not in STATE.silenced_kinds):
             # Once a kind has been declared unrecoverable it has been reported
             # in full; re-announcing the same diagnosis every sample would bury
             # the log without adding information.
@@ -1241,8 +1397,10 @@ def _handle_failure(optimizer, monitor, step, loss_val, grad_norm, lr, advanced,
     # what interventions are worth.
     attempts = STATE.attempts_by_kind.get(kind, 0)
     if attempts >= MAX_ATTEMPTS_PER_KIND:
-        if kind not in STATE.abandoned_kinds:
-            STATE.abandoned_kinds.add(kind)
+        report_only = kind in REPORT_ONLY_KINDS
+        seen = STATE.silenced_kinds if report_only else STATE.abandoned_kinds
+        if kind not in seen:
+            seen.add(kind)
             last_snapshot = monitor.store.snapshots[-1] if (monitor is not None and monitor.store.snapshots) else None
             if last_snapshot is not None:
                 elapsed_seconds = time.time() - last_snapshot["time"]
@@ -1255,14 +1413,27 @@ def _handle_failure(optimizer, monitor, step, loss_val, grad_norm, lr, advanced,
                 # how long the run has been going. Best available fallback.
                 elapsed_seconds = time.time() - STATE.train_start
                 last_checkpoint_step = None
+            # A report-only kind gets its own event type. Emitting "unrecoverable"
+            # here would be a claim ARC cannot support: it never acted, so it has
+            # no evidence the run is past saving — and on the measured lr=0.5 pair
+            # that claim would have been flatly false, because the arm that was
+            # left alone escaped the plateau and finished at 73.19%. "I have
+            # nothing further to add" and "this run is dead" are different
+            # statements and only one of them is earned.
             emit({
-                "type": "unrecoverable",
+                "type": "detection_silenced" if report_only else "unrecoverable",
                 "step": step,
                 "kind": kind,
                 "attempts": attempts,
                 "elapsed_seconds": round(elapsed_seconds, 3),
                 "last_checkpoint_step": last_checkpoint_step,
                 "message": (
+                    f"'{kind}' has now been reported {attempts} times and the run has not "
+                    "resumed progress. ARC has no response to this failure that is known "
+                    "to help, so it has not acted, and it will stop repeating the same "
+                    "diagnosis. Training continues untouched. Worth checking whether this "
+                    "run is still worth its GPU time."
+                    if report_only else
                     f"{attempts} recovery attempts for '{kind}' did not restore healthy "
                     "training. Every retained checkpoint predates the collapse's onset or "
                     "is itself degenerate, so further rollbacks cannot help. "
@@ -1270,11 +1441,29 @@ def _handle_failure(optimizer, monitor, step, loss_val, grad_norm, lr, advanced,
                 ),
             })
             emit_log(
-                f"Run judged unrecoverable after {attempts} attempts at '{kind}'. "
-                "ARC has stopped intervening; the run continues untouched so the failure "
-                "stays visible rather than being masked.",
-                "error",
+                (f"'{kind}' reported {attempts} times with no change. Silencing further "
+                 "reports for this kind. ARC has not intervened and is not judging the "
+                 "run unrecoverable — it has no basis to, having taken no action."
+                 if report_only else
+                 f"Run judged unrecoverable after {attempts} attempts at '{kind}'. "
+                 "ARC has stopped intervening; the run continues untouched so the failure "
+                 "stays visible rather than being masked."),
+                "error" if not report_only else "warn",
             )
+        return
+
+    if kind in REPORT_ONLY_KINDS:
+        # Detect-only. Deliberately placed above the cooldown and baseline gates
+        # so both A/B arms behave identically for this kind, and above every
+        # path that could touch the run — in particular the zero_grad() at the
+        # bottom of this function, which would discard the user's update and is
+        # exactly the kind of silent intervention the control arm exists to rule
+        # out. See REPORT_ONLY_KINDS for the measurement behind this.
+        emit({"type": "thought", "phase": "observation",
+              "message": f"Reporting '{kind}' without acting: no response to this failure has "
+                         "been shown to help, and the one that was tried made a recoverable "
+                         "run terminal. Training continues untouched."})
+        STATE.attempts_by_kind[kind] = attempts + 1
         return
 
     if step - STATE.last_intervention_step < COOLDOWN_STEPS:

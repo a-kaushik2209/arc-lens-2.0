@@ -27,7 +27,7 @@ Do this at least 30 minutes before your slot, not 2 minutes before.
 2. **Install the Python side into the interpreter VS Code has selected**
    ```bash
    pip install torch arc-training torchvision
-   python tests/test_harness.py    # 50 tests, ~45s
+   python tests/test_harness.py    # 54 tests, ~50s
    ```
    Both suites green means the harness, the detector, checkpointing and the end-to-end path
    all work on this machine. This is the single best use of five minutes before a demo.
@@ -107,9 +107,9 @@ Point at the four charts while it runs.
 > them used to trigger and we deleted both after measuring what they did to healthy runs."
 
 Do not claim the four signals catch failures a loss curve cannot show. One of them is wired to a
-trigger, and that trigger has never fired in validation — a dead run only loses 12.6% of its
-rank, so it cannot reach a 50% threshold. The silent failure we *do* catch is a loss plateau,
-and that is read off the loss itself, not off these four. If a judge pushes, the answer is Q5 in
+trigger; it fires rarely, and when it did fire, acting on it cost 44 points of accuracy against
+the control arm — so it now reports without acting. The silent failure we *do* catch is a loss
+plateau, and that is read off the loss itself, not off these four. If a judge pushes, Q5 in
 `FAQ_JUDGES.md`, and it is a better story than the claim it replaced.
 
 ### 3.3 The failure
@@ -120,12 +120,19 @@ paraphrase.
 
 > "It rolled back N steps and cut the learning rate from X to Y."
 
+That line is for a `numerical` failure. **A `loss_plateau` produces no intervention at all** —
+the Action Log will show the detection and an explicit "reporting without acting" entry, and
+there is no rollback or LR change to read out. Do not promise one and then have the log
+contradict you on screen; the reason it takes no action is the strongest part of the story
+(see §3.3 below).
+
 **Expect `numerical` or `loss_plateau`.** Those are the two kinds this demo produces and the
 only two verified working. At `ARC_DEMO_LR=0.5` the run dies silently rather than exploding, and
 the marker you get is `loss_plateau` ("stalled" on the chart) at around step 316–330.
 `gradient_entropy_collapse` no longer exists — deleted after it took a healthy CIFAR-10 run from
 87.43% to chance — so do not build the talk track around it. `representation_collapse` still
-exists but has never fired in validation, so do not promise it either.
+exists, fires rarely, and no longer acts — the one sweep where it fired, its rollback took a run
+that recovered to 75.18% on its own down to 30.84%. Do not promise it as a rescue.
 
 **If you demo the plateau, say what it does and does not do.** It reports the death; it does not
 reverse it. The run still finishes at 10.00%. Claiming a rescue here is the one thing that will
@@ -139,9 +146,19 @@ reaching for a marker that will not appear:
 > tool exists to catch and it missed it. So we measured: a healthy run's longest stall is 82
 > steps, the dead one's is 764. That rule is in now, and it fires at step 316.
 >
-> It detects it — it does not save it. The run still ends at 10%. By the time 300 stalled steps
-> confirm a plateau, every checkpoint we hold is already post-collapse, so we cut the learning
-> rate and report it rather than pretending a rollback would help.
+> "And it was wrong twice. Over a longer run it fired on a healthy model at 87.5% —
+> convergence looks exactly like a plateau. So it now also checks whether the run ever improved
+> at all: dead runs stall having gone nowhere, converged ones stall having gone a long way.
+>
+> "Then the sweep said the *response* was wrong. It used to cut the learning rate. On the
+> lr=0.5 arm the control sat at chance for four epochs and then escaped on its own — cosine
+> decay walked the LR down and it climbed to 73%. The arm we intervened on had already been
+> cut an order of magnitude below that and never escaped: 10%, all ten epochs. The detection
+> was right and the fix made it 63 points worse. So it reports now and touches nothing."
+>
+> It detects it — it does not save it, deliberately. Rolling back is no better: by the time 300
+> stalled steps confirm a plateau, every checkpoint we hold is already post-collapse. Neither
+> response we have is known to help, and we have a measurement saying one of them hurts.
 >
 > There is also a rank rule, still in, still never fired — a dead run only loses 12.6% of its
 > effective rank, so it cannot reach a 50% threshold. We left it conservative rather than tuning

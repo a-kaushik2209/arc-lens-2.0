@@ -67,17 +67,18 @@ STRUCTURAL_RESPONSES = {
     "loss_plateau": (
         "Training has stopped making progress while the loss stays finite — the "
         "signature of a run that is alive on paper and dead in practice. No NaN, no "
-        "gradient spike, nothing the numerical guards can see. Reducing the learning "
-        "rate without rolling back, because every retained checkpoint is already past "
-        "the point where progress stopped.",
-        "reduce_lr",
+        "gradient spike, nothing the numerical guards can see. Reporting without "
+        "acting: cutting the learning rate here was measured to lock the collapse in, "
+        "turning a run that recovered to 73% into one that finished at chance.",
+        "report",
     ),
     "representation_collapse": (
         "The layers are collapsing onto a low-dimensional subspace, so the model is "
         "losing capacity it will not recover on its own. This produces no NaN and no "
-        "gradient spike. Restoring the last healthy checkpoint and reducing the "
-        "learning rate.",
-        "rollback_and_reduce",
+        "gradient spike. Reporting without acting: rolling back and cutting the "
+        "learning rate here was measured to hold a run at 30.84% that recovered to "
+        "75.18% when left alone.",
+        "report",
     ),
 }
 STRUCTURAL_KINDS = frozenset(STRUCTURAL_RESPONSES)
@@ -99,7 +100,12 @@ def _snapshot(step, epoch, loss, grad_norm, lr, loss_history, advanced) -> dict:
         "recent_losses": [round(x, 4) for x in loss_history[-8:]],
     }
     if advanced:
-        snapshot["advanced_telemetry"] = {k: round(v, 6) for k, v in advanced.items()}
+        # `nonfinite` is a list of signal names that went inf/NaN, not a number.
+        # Rounding it would raise, and this snapshot is built while a failure is
+        # already being handled — the worst possible place to throw.
+        snapshot["advanced_telemetry"] = {
+            k: (v if isinstance(v, list) else round(v, 6)) for k, v in advanced.items()
+        }
     return snapshot
 
 
@@ -208,7 +214,15 @@ def run_recovery_agent(
         analysis, action = STRUCTURAL_RESPONSES[kind]
         emit_thought(f"Analysis: {reason}. {analysis}", "reasoning")
 
-        if action == "rollback_and_reduce":
+        if action == "report":
+            # Unreachable in normal operation: _handle_failure returns before
+            # calling the agent for a REPORT_ONLY_KIND. Kept so that a kind
+            # marked report-only in one file and not the other degrades to
+            # doing nothing, rather than falling through to the conservative
+            # fallback below — which rolls back and cuts the LR, the exact
+            # action the measurement ruled out.
+            emit_thought("No action: no response to this failure is known to help.", "action")
+        elif action == "rollback_and_reduce":
             emit_thought(f"Calling tool: rollback_and_reduce_lr(factor={SOFT_LR_FACTOR})", "action")
             steps_back = monitor.store.restore() if monitor is not None else 0
             old_lr, new_lr = _scale_lr(optimizer, monitor, SOFT_LR_FACTOR)

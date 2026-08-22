@@ -100,9 +100,10 @@ Icon\r
 *.tmp
 
 # Documentation — allowlist, not denylist: any new .md file is ignored by
-# default (safe) unless explicitly un-ignored below. This is why
-# docs/ARC_FUNDING_PROPOSAL.md and docs/arc_lens_business_plan.md (private
-# business docs) need no line here — they stay ignored automatically.
+# default unless explicitly un-ignored below, so a scratch note dropped in the
+# tree never ships by accident. The repository is private, and everything listed
+# here is tracked deliberately so a second developer inherits the reasoning
+# rather than just the code — including the business docs.
 *.md
 !README.md
 !docs/ARCHITECTURE.md
@@ -113,6 +114,11 @@ Icon\r
 !docs/COMPETITIVE_LANDSCAPE.md
 !docs/DEMO_SCRIPT.md
 !docs/FAQ_JUDGES.md
+!docs/SWEEP_LOG.md
+!CARBON_FOOTPRINT.md
+!ROUND2_CRITIQUE_AND_SUGGESTIONS.md
+!docs/ARC_FUNDING_PROPOSAL.md
+!docs/arc_lens_business_plan.md
 
 # Local archives
 *.zip

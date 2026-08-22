@@ -123,9 +123,12 @@ What to show, in order:
 4. Narrate the trace as it appears: failure detected → response chosen → applied, all inside the
    same run, no restart.
 5. Be precise about which failure you got. A `numerical` failure gets a rollback and the loss
-   curve resumes. A `loss_plateau` ("stalled") gets a learning-rate cut and **no** rollback —
-   that run ends at chance accuracy, and the honest line is "we detected a death that every
-   loss-curve tool would have shown as a flat green line", not "we saved it".
+   curve resumes. A `loss_plateau` ("stalled") gets **no action at all** — it is report-only,
+   and that is a deliberate result, not a gap. It used to cut the learning rate; the A/B
+   measured that doing so took a run which recovered to 73.19% on its own down to 10.00%.
+   The honest line is "we detected a death that every loss-curve tool would have shown as a
+   flat green line, and we measured that intervening made it worse, so we don't" — not
+   "we saved it".
 
 **Presenter note:** the recovery trace is a deterministic rule engine, not a live LLM call —
 it's fast and 100% reproducible on stage, which is a feature for a demo, not a limitation to

@@ -859,7 +859,7 @@ Mirrors the `chatPanel` lifecycle, as suggested.
 a prompt from a full 10 000-entry history, which is the case that would have thrown.
 
 ### L-6 — No tests, no CI, no linter
-**Status: fixed. 95 tests across five suites, plus CI.**
+**Status: fixed. 108 tests across five suites, plus CI.**
 - `tests/pure.test.js` (17) — `extractCodeBlock`, `buildScriptGenMessages`,
   `buildSystemPrompt`, `buildReportHtml`, including XSS escaping, the 10 000-entry case, and
   that a missing point breaks the chart line rather than being bridged.
@@ -1170,8 +1170,9 @@ zero for any run. It is a measure of outlier spread, not of information content.
 > healthy and dead runs; this one goes for a signal that converges to an identical value on
 > both. In each case a signal's natural early-training trajectory resembled the pathology it was
 > meant to detect. The shipped detection surface is now materially smaller than this project
-> once claimed — numerical divergence, gradient-norm clipping, and one conservative rank rule —
-> and that is the honest size of it.
+> once claimed. As of the latest sweep it is numerical divergence and gradient-norm clipping;
+> the two surviving structural rules detect and report but are no longer allowed to act, after
+> their responses were measured making failing runs worse. That is the honest size of it.
 
 ---
 

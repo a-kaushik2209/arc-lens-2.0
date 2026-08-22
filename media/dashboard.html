@@ -901,6 +901,11 @@ const KIND_LABELS = {
   gradient_entropy_collapse: 'entropy collapse'
 };
 function shortKind(kind) { return KIND_LABELS[kind] || kind || 'failure'; }
+// Kinds ARC reports without acting on. Mirrors REPORT_ONLY_KINDS in
+// _arc_bootstrap.py: no intervention event will follow one of these, so the
+// status strip must not promise a recovery that is never coming.
+const REPORT_ONLY_KINDS = new Set(['loss_plateau']);
+function isReportOnly(kind) { return REPORT_ONLY_KINDS.has(kind); }
 function shortAction(action) {
   if (action === 'rollback_and_reduce_lr') return 'rollback + LR';
   if (action === 'reduce_lr') return 'LR down';
@@ -1370,6 +1375,28 @@ function handleMessage(msg) {
       updateRatios.push(adv.weight_update_ratio ?? null);
       gradEntropies.push(adv.gradient_entropy ?? null);
       gradFlowRatios.push(adv.grad_flow_ratio ?? null);
+
+      // A signal that went inf/NaN is still information, and the chart can only
+      // show a gap. `grad_flow_ratio` is late-layer gradient norm over early —
+      // it returns inf exactly when the early layers stop receiving gradient at
+      // all. On the run this was found in, the healthy arm stayed inside
+      // 1.36-3.10 for every sample while the dead arm hit 50.11 and then went
+      // non-finite for the rest of the run. Say so once per signal, rather than
+      // leaving an unexplained hole in the line.
+      if (Array.isArray(adv.nonfinite)) {
+        window._arcNonfinite = window._arcNonfinite || {};
+        for (const name of adv.nonfinite) {
+          if (window._arcNonfinite[name]) { continue; }
+          window._arcNonfinite[name] = true;
+          addLogEntry(
+            'info', 'intervention',
+            `${name} went non-finite at step ${msg.step} — the chart gap from here is a diverged ` +
+            `signal, not missing data. For grad_flow_ratio this means early-layer gradients have ` +
+            `collapsed toward zero while later layers still receive one.`
+          );
+        }
+      }
+
       if (!hasAdvanced && !window._arcAdvancedWarned) {
         window._arcAdvancedWarned = true;
         addLogEntry('info', 'intervention', 'Advanced diagnostics unavailable — install arc-training for effective rank, entropy, and update-ratio tracking.');
@@ -1472,7 +1499,10 @@ function handleMessage(msg) {
       flashCard(document.getElementById('card-grad'), 'flash-critical');
       updateStrip({
         status: 'Failure detected', outcome: `${shortKind(msg.kind)} @ step ${msg.step}`,
-        current: 'Anomaly', next: 'Attempting rollback / learning-rate reduction'
+        current: 'Anomaly',
+        next: isReportOnly(msg.kind)
+          ? 'Reporting only — no intervention is known to help this failure'
+          : 'Attempting rollback / learning-rate reduction'
       }, /* urgent */ true);
       break;
 
@@ -1537,6 +1567,19 @@ function handleMessage(msg) {
       }
       break;
     }
+
+    case 'detection_silenced':
+      // A report-only rule has stopped repeating itself. Deliberately *not* the
+      // unrecoverable banner: ARC took no action here, so it cannot claim the
+      // run is beyond saving — the measured control arm reported this same
+      // plateau, was left alone, and recovered to 73.19%. Overstating it would
+      // send a user to kill a run that was about to come back.
+      addLogEntry('failure', 'failure', `[Step ${msg.step}] ${msg.message}`);
+      updateStrip({
+        status: 'Reported, not acted on', outcome: `${shortKind(msg.kind)} @ step ${msg.step}`,
+        current: 'Watching', next: 'No intervention is known to help this failure — check whether the run is worth continuing'
+      });
+      break;
 
     case 'checkpoint_budget': {
       const budgetNote = (typeof msg.budget_mb === 'number')

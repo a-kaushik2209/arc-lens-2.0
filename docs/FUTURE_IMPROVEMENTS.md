@@ -406,7 +406,7 @@ Both fixed in `arc-training` (same author, AGPL). A third fix there —
 was a large part of the overhead in 2.2.
 
 ### 2.6 Test the pure functions
-**Effort: 3 h · Impact: medium — Status: done, 95 tests plus CI**
+**Effort: 3 h · Impact: medium — Status: done, 108 tests plus CI**
 
 See [L-6](SECURITY_AUDIT.md).
 
@@ -507,7 +507,7 @@ path to real usage than the VS Code extension.
 | 2.3 | Fix traceback line numbers | 2 h | Med-High | Trust | ✅ Done (`runpy`, zero injected lines) |
 | 2.4 | Bound checkpoint memory | 3 h | Med-High | Trust | ✅ Done (host-resident store, budget reported) |
 | 2.5 | Visible degradation | 2 h | Med-High | Trust | ✅ Done — found 2 real upstream bugs |
-| 2.6 | Tests + CI | 3 h | Medium | Trust | ✅ Done (95 tests, 3 CI jobs incl. secret scan) |
+| 2.6 | Tests + CI | 3 h | Medium | Trust | ✅ Done (108 tests, 3 CI jobs incl. secret scan) |
 | — | **Structural detection reachable at all** *(not in the original plan)* | — | Medium | Trust | ⚠️ Done, then mostly walked back — see below |
 | 3.1 | Hybrid LLM recovery loop | 2 d | High | Later | Open — deliberate, see below |
 | 3.2 | DDP / FSDP support | 1 w | High | Later | Open — deliberate, see below |
@@ -566,22 +566,39 @@ real detection from a spurious one. Fixed with a fixture verified to diverge wit
 
 **What is actually left.** Two structural rules.
 
-`loss_plateau` fires when the loss has not beaten its best value for 300 consecutive steps. It
+`loss_plateau` fires when the loss has not beaten its best value for 300 consecutive steps *and*
+the run never improved past 60% of its opening loss. Both conditions are needed. It
 exists because a real lr=0.5 run finished at 10.00% — chance — with its loss pinned at ln(10),
 and ARC reported **zero failures across all 780 steps**: the loss was finite, the gradient norm
 was 0.07, and the rank barely moved. Measured on both arms, a healthy run's longest stall is 82
-steps against the dead run's 764, a 9.3x separation. It fires at step 316–330 on the dead arm and
-never on the healthy one. It detects the death but does not reverse it — accuracy after the
-intervention is unchanged at 10.00%, which is why the response is an LR cut rather than a
-rollback into a ring of post-collapse checkpoints.
+steps against the dead run's 764, a 9.3x separation. It fires at step 316–330 on the dead arm.
 
-`representation_collapse` fires at effective rank below 50% of the run's own baseline. It has
-**never fired in validation**, and now has a measured reason: a healthy run bottoms at 97.2% of
-its step-1 baseline and a *dead* one at 87.4%, so the trigger is four times further away than a
-real collapse reaches. `mean_effective_rank` is the SVD entropy of the weight matrices, and a
-network can emit a constant output while every weight matrix stays well-conditioned — it
-measures weight conditioning, not representational rank. Conservative and unexercised, not
-proven.
+The progress condition was added after a 10-epoch A/B caught the patience-only version firing
+twice on a run that reached 87.5%. Convergence is itself a plateau — the best-ever-loss counter
+makes stalls grow without bound as a run succeeds — so no patience value separates the two. What
+does is whether the run ever got anywhere: best/first loss is 0.271 on a healthy run and 0.888
+on a dead one.
+
+**It is report-only, and that is the second thing the A/B corrected.** The rule shipped with
+`reduce_lr` as its response. On the `lr=0.5` arm the control sat at chance for four epochs and
+then escaped by itself — cosine decay walked the LR down to ~2.5e-01 and the run climbed to
+73.19% — while the intervened arm, already cut to 3.2e-02, stayed at 10.00% for all ten epochs.
+Large steps were the only mechanism that could leave the dead region, and the intervention
+removed them: −63.19pp from a correct detection. Rolling back instead is no better, since
+confirmation takes 300 steps and every retained checkpoint is post-collapse by then. With no
+response known to help, the rule reports and stops.
+
+`representation_collapse` fires at effective rank below 50% of the run's own baseline. For a
+long time it **never fired at all**, and that had a measured reason: a healthy run bottoms at
+97.2% of its step-1 baseline and the dead run we had measured at 87.4%, so the trigger sat four
+times further away than a real collapse reached. `mean_effective_rank` is the SVD entropy of the
+weight matrices, and a network can emit a constant output while every weight matrix stays
+well-conditioned — it measures weight conditioning, not representational rank.
+
+**It is also report-only now**, because the one sweep in which it did fire showed its response
+doing the damage: at `lr=0.5` the control arm recovered to 75.18% while the arm it rolled back
+and cut three times finished at 30.84%. −44.34pp, the same mechanism as the plateau rule — the
+control escaped once cosine decay lowered the LR by itself, and the cut arm never did.
 
 A related bug is fixed: baselines used to be captured *after* the 200-step warmup, so a run that
 died earlier had its reference measured on the corpse — the dead arm scored 99.72% of its own
@@ -590,6 +607,47 @@ captured from the opening samples while the verdict still waits for the warmup.
 
 Alongside those: numerical divergence (non-finite or `|loss| > 1e6`), which is verified working,
 and gradient-norm clipping above 50. That is the shipped detection surface.
+
+### Open, and the most promising lead we have: `grad_flow_ratio`
+
+**Status: measured, not implemented. Needs the four-LR sweep before it becomes a rule.**
+
+While validating the plateau rule we found that `grad_flow_ratio` — late-layer gradient norm
+over early-layer, already collected and already charted — separates the two arms harder than
+anything else, and does it **266 steps earlier**:
+
+| step | healthy lr=0.03 | dead lr=0.50 |
+| ---: | ---: | ---: |
+| 1 | 2.08 | 2.08 |
+| 25 | 3.10 | 5.43 |
+| 50 | 2.36 | **50.11** |
+| 75 → 375 | 1.36 – 2.72 | **absent (non-finite)** |
+
+The healthy run stays inside a 1.36–3.10 band for all 16 samples. The dead run is 16x above the
+healthy maximum by step 50 and non-finite from step 75 on, because early-layer gradient norms
+fall below the `1e-10` floor upstream and the ratio becomes `inf`. That is textbook vanishing
+gradient: the early layers stop receiving signal entirely while the late layers still have one.
+
+Two things follow.
+
+**The absence is currently thrown away.** `_finite()` correctly refuses to emit `inf` into JSON,
+so the chart shows a gap exactly where the signal is screaming. Dropping a non-finite value is
+right; dropping the *fact* that it went non-finite is information loss. The harness should
+record that the ratio diverged without inventing a number for it.
+
+**This is the first candidate that could actually rescue a run rather than report it.** The
+network dies around step 45. `loss_plateau` cannot confirm before step ~316, by which point
+every retained checkpoint is post-collapse — which is precisely why its response is an LR cut
+and not a rollback. A trigger at step 50 lands *at* the collapse, while checkpoints from step 40
+may still predate it. That is the difference between "we detected a death" and "we prevented
+one", and it is the single highest-value item left on this list.
+
+It is not a rule yet, and it must not become one on this evidence. This is one seed on one
+workload, which is exactly the standard the update-ratio and gradient-entropy rules met right
+before they were deleted for harming healthy runs. It needs the four-learning-rate A/B, and the
+threshold has to be relative to the run's own early band rather than an absolute ceiling —
+`grad_flow_ratio` is architecture-dependent, and a value tuned on a 9-layer CNN means nothing on
+a transformer.
 
 Two structural rules removed for the same reason is the generalisable result, and it is worth
 more than the feature would have been: in both cases a signal's natural early-training

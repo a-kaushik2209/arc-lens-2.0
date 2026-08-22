@@ -36,21 +36,38 @@ The fourth was added the same way it would have been deleted: by measurement. A 
 run at lr=0.5 finished at 10.00% — chance — with its loss pinned at ln(10), and ARC reported
 **zero failures across all 780 steps**. No NaN, no gradient spike, no rank collapse; every rule
 was silent while the dashboard stayed green. That is the failure this tool exists to catch, and
-it did not. The fix is a loss-plateau rule, and it earns its place on the same evidence
-standard the deleted rules failed: replaying both arms, a healthy run's longest stall is 82
-steps against the dead run's 764 — a 9.3x separation, where effective rank offered 1.1x and
-gradient entropy offered none.
+it did not. The fix is a loss-plateau rule, held to the same evidence standard the deleted rules
+failed — which it then failed twice itself, in both directions that matter.
 
-What survives is deliberately narrow: divergence that is unambiguous (non-finite or exploded
-loss), gradient explosion, a loss plateau sustained past 300 steps, and a representation-collapse
-rule whose threshold is conservative enough that it has never fired in validation. The other
-structural signals are still collected and charted — they are informative to a human reading a
-run — they just no longer get to act on their own.
+Replaying both arms, a healthy run's longest stall was 82 steps against the dead run's 764. But
+a longer A/B immediately caught a false positive: over 3900 steps a run reaching **87.5%**
+tripped it twice, because the counter keys off the best-ever batch loss, so as a run converges
+its own record gets harder to beat and stalls grow without bound. No patience value fixes that.
+What separates the cases is whether the run ever got anywhere — a dead run stalls having never
+improved (best/first = 0.888) while a converged one stalls having improved enormously (0.271).
 
-**Detection is not the same as rescue, and the plateau rule is honest about it.** Confirming a
-stall takes 300 steps, by which point every checkpoint in the ring predates nothing useful. ARC
-reports the death and lowers the learning rate; it does not resurrect the run. Reporting a
-silent failure instead of showing a green dashboard for 780 steps is the claim — not recovery.
+Then the four-learning-rate sweep went against the rule's *response*. It cut the learning rate
+on detection. At `lr=0.5` the control arm sat at chance for four epochs and then escaped on its
+own — cosine decay lowered the LR and it climbed to **73.19%** — while the arm ARC intervened
+on, cut an order of magnitude further, finished at **10.00%**. The detection was correct and
+the intervention cost 63 points. The rule now reports and takes no action.
+
+Then the same thing happened to the last structural rule that could still act. The sweep
+confirming the plateau fix caught `representation_collapse` doing it: at `lr=0.5` the control arm
+recovered to **75.18%** while the arm it rolled back and cut finished at **30.84%** — −44.34pp,
+the identical mechanism.
+
+**So no structural rule acts any more.** Every one that was given the power either fired on
+healthy runs or damaged failing ones. What still intervenes is unambiguous divergence
+(non-finite or exploded loss) and gradient explosion, both verified. The structural signals are
+still collected, charted, and reported when they trip — they are informative to a human reading
+a run — they just no longer get to act on their own.
+
+**Detection is not the same as rescue, and the plateau rule is honest about it.** It takes no
+action, because neither response available survives measurement: the LR cut made a run 63 points
+worse, and confirming a stall takes 300 steps, by which point every checkpoint in the ring is
+already post-collapse. Reporting a silent failure instead of showing a green dashboard for 780
+steps is the claim — not recovery.
 
 ---
 
@@ -124,14 +141,27 @@ flow ratio (early vs late layer gradients; needs ≥4 parameterised layers).
 
 | Action | Trigger |
 | :--- | :--- |
-| `rollback_and_reduce_lr` | Loss non-finite or exploded past 1e6, or a confirmed representation collapse |
-| `reduce_lr` | Loss has not beaten its best value for 300 consecutive steps |
+| `rollback_and_reduce_lr` | Loss non-finite or exploded past 1e6 |
 | `enable_grad_clipping` | Gradient norm above 50 — applied by ARC, not just recommended |
+| *(report only — no action)* | Loss stalled 300+ steps **and** never improved past 60% of its opening value |
+| *(report only — no action)* | Effective rank below 50% of the run's own baseline |
 
-A plateau deliberately does **not** roll back. By the time 300 stalled steps have confirmed it,
-every checkpoint still in the ring is post-collapse — restoring one returns the model to the
-state it is already in, burns the ring, and spends a recovery attempt. Cutting the learning
-rate is the only move that can change the trajectory, so it is the only move taken.
+**A plateau is reported and not acted on, because acting on it was measured to make things
+worse.** It used to cut the learning rate. On the `lr=0.5` arm of the A/B that took a run
+which recovered to **73.19%** on its own and left it at **10.00%** — chance — for all ten
+epochs:
+
+| epoch | baseline (no action) | active (3 × `reduce_lr` from step 316) |
+| ---: | :--- | :--- |
+| 1 | 10.00%, lr 4.91e-01 | 10.00%, lr 2.45e-01 |
+| 5 | **26.73%**, lr 2.56e-01 | 10.00%, lr 3.20e-02 |
+| 10 | **73.19%** | 10.00%, loss 2.3026 = ln(10) |
+
+Both arms sat at chance for four epochs. The control arm escaped once cosine decay walked the
+LR down by itself; the arm ARC "helped" never did. Large steps were the only thing that could
+carry the weights out of the dead region, and cutting the LR removed them. The detection was
+correct — the run really was dead — but no available response is known to help, so the rule
+reports and stops there.
 
 **Two rules were removed after measurement, and neither is coming back without new evidence.**
 
@@ -206,7 +236,7 @@ npm test                       # TypeScript + dashboard suites
 python tests/test_harness.py   # harness, detector, checkpointing, end-to-end
 ```
 
-95 tests — 45 TypeScript/dashboard, 50 Python. The Python suite includes six end-to-end tests
+108 tests — 46 TypeScript/dashboard, 62 Python. The Python suite includes six end-to-end tests
 that run the real harness against real training loops, asserting that gradient accumulation does
 not inflate the step count, that an LR intervention survives a scheduler rewriting the learning
 rate every step, that baseline mode never intervenes, and that tracebacks point at the user's
@@ -228,6 +258,7 @@ CI additionally fails the build on any secret-shaped literal in source.
 * [`docs/FUTURE_IMPROVEMENTS.md`](docs/FUTURE_IMPROVEMENTS.md) — roadmap, and what is
   deliberately still open
 * [`docs/EXPERIMENT_RESULTS.md`](docs/EXPERIMENT_RESULTS.md) — measured A/B results
+* [`docs/SWEEP_LOG.md`](docs/SWEEP_LOG.md) — every A/B sweep run, including the abandoned ones
 
 ## License
 

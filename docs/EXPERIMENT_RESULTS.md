@@ -13,6 +13,12 @@ python python/experiment_ab.py --lrs 0.03 0.1 0.25 0.5 --epochs 10
 
 Raw output: [`benchmark_overhead.json`](benchmark_overhead.json), [`experiment_ab.json`](experiment_ab.json).
 
+`experiment_ab.json` holds only the most recent sweep. Every sweep run against the
+loss-plateau rule — including the two that were killed mid-run and the one whose numbers
+this document quotes for the pre-fix `lr=0.5` comparison — is listed in
+[`SWEEP_LOG.md`](SWEEP_LOG.md), with the superseded results kept alongside it so the
+figures below can be checked against the run that produced them.
+
 ---
 
 ## Setup
@@ -67,11 +73,14 @@ consequential one available on a diverging run. Every number measured before tha
 compared against a control arm that ARC was quietly acting on. Those numbers have been withdrawn
 rather than adjusted; see §3.
 
-**What ARC can act on, as of these results:** a non-finite or exploded loss, a gradient norm
-above 50, a loss plateau sustained past 300 steps, and a representation collapse below half the
-run's own baseline effective rank. Two other rules were built and deleted after measurement,
-after they demonstrably harmed healthy runs. The rank rule has never fired in validation, so it
-is untested in both directions and is described that way rather than claimed.
+**What ARC can act on, as of these results:** a non-finite or exploded loss, and a gradient
+norm above 50. That is the whole list.
+
+Four structural rules have been built and none of them survives with the power to act. Two —
+weight update ratio and gradient entropy — fired on healthy runs and were deleted (§3, §4). The
+other two, loss plateau and representation collapse, detect real failures correctly but their
+responses were measured making those failures worse, and are now report-only (§2, §4b). They
+still detect, chart and report; they do not steer the run.
 
 <!-- RESULTS_TABLE -->
 
@@ -145,18 +154,101 @@ Re-running both arms with the rule in place:
 A 1-epoch repeat fired at **step 316**, matching the offline replay's prediction for patience
 300 exactly.
 
+### And then the longer A/B said the rule was wrong
+
+Everything above was measured on **780-step** runs. Extending to 10 epochs — 3900 steps — broke
+it on the first arm:
+
+```
+lr=0.03 baseline -> best_val_acc=87.5  failures=2  kinds=loss_plateau
+```
+
+A run reaching **87.5%** tripped the rule twice. No harm followed, because the baseline arm
+suppresses interventions, but the detector fired on a plainly healthy run — which is exactly
+what got the update-ratio and gradient-entropy rules deleted.
+
+**Patience cannot fix this, and that is the important part.** The counter keys off the
+*best-ever* batch loss. As a run converges, its own record gets harder to beat, so the stalls
+grow without bound — convergence *is* a plateau. There is no patience value that separates a
+converged run from a dead one, because the stall length on a successful run is unbounded. The
+780-step measurement of "82" was not wrong; it was just far too short to see the shape of the
+thing.
+
+What separates them is whether the run ever got anywhere:
+
+| arm | first loss | best loss | best / first |
+| :--- | ---: | ---: | ---: |
+| lr=0.03 — healthy | 2.3018 | 0.6233 | **0.271** |
+| lr=0.50 — dead | 2.3221 | 2.0632 | **0.888** |
+
+A dead run stalls having never improved. A converged run stalls having improved enormously. The
+rule now requires both conditions — stalled 300+ steps **and** `best/first > 0.60`. That test
+needs no knowledge of the class count, or even that the task is classification, which
+"loss near ln(num_classes)" would have.
+
+This is the third time a measurement has gone against a rule that was already written, and the
+second time it happened *after* the rule was committed and documented. That is the argument for
+the A/B existing at all: the rule looked correct, the reasoning was sound, the short-run evidence
+supported it, and it was still wrong.
+
+### And then the sweep said the *response* was wrong too
+
+The rule went into the four-learning-rate sweep with `reduce_lr` as its response. Six arms
+behaved: `lr=0.03`, `0.1` and `0.25` all finished 86.8–87.8% with the rule silent in both arms,
+which is what the progress guard was added to achieve. The `lr=0.5` pair did not.
+
+| epoch | baseline — no action | active — 3 × `reduce_lr` from step 316 |
+| ---: | :--- | :--- |
+| 1 | 10.00%, lr 4.91e-01 | 10.00%, lr 2.45e-01 |
+| 2 | 10.00%, lr 4.58e-01 | 10.00%, lr 1.14e-01 |
+| 4 | 9.76%, lr 3.34e-01 | 10.00%, lr 4.18e-02 |
+| 5 | **26.73%**, lr 2.56e-01 | 10.00%, lr 3.20e-02 |
+| 10 | **73.19%** | **10.00%**, loss 2.3026 = ln(10) |
+
+**Delta: −63.19pp, in ARC's disfavour, from a detection that was entirely correct.** Both arms
+really were pinned at chance for four solid epochs; there was nothing wrong with the diagnosis.
+
+The mechanism is visible in the LR column. The baseline's cosine schedule walked the learning
+rate down on its own, and somewhere around 2.5e-01 the run escaped the dead region and climbed
+to 73%. The active arm had been cut to 3.2e-02 by that point and never escaped. Large steps
+were the only thing that could carry the weights out — reducing the learning rate at the moment
+of the plateau is precisely the wrong move, because it removes the one mechanism that was going
+to fix it.
+
+This is **not** the run-to-run variance discussed in §5. A 63-point gap is inside the spread
+that unstable learning rates can produce, so magnitude alone would not settle it — but the
+epoch trace does. The baseline's recovery is driven by a deterministic cosine schedule and is
+visible arriving over epochs 5–10, and the intervened arm's LR is an order of magnitude below
+the value at which the escape happened. The causal path is legible, not inferred from the delta.
+
+So `loss_plateau` is now **report-only**: it detects, it says so, and it changes nothing.
+
+Rolling back instead is no improvement. Confirming a plateau takes 300 stalled steps and the
+network dies around step 45, so the verdict lands ~285 steps too late for any checkpoint in the
+ring to be worth restoring — restoring one returns the model to the state it is already in and
+spends a recovery attempt to do it. Neither available response helps, and §4 already sets the
+standard: a rule may act only once a measured trajectory shows the action helps. There is no
+such measurement for a plateaued run, and there is now a measurement against one.
+
+**Reporting is not automatically passive**, which is the part that nearly slipped through.
+`_handle_failure` ends by calling `optimizer.zero_grad()` so that gradients which produced a NaN
+cannot reach the weights. On a report-only path that would discard the user's update — on a
+diverging run, the single most consequential intervention available, and one that would have
+made "changes nothing" false while looking passive in the log. The report-only gate therefore
+sits above that call, and above the cooldown and baseline gates, so both arms run identical
+code for this kind. Three of the six regression tests fail if the gate is removed.
+
 ### What this does not do
 
-**Accuracy is still 10.00%.** ARC now sees the failure and cannot reverse it. Confirming a
-plateau takes 300 stalled steps and the network dies around step 45, so the earliest possible
-verdict lands ~285 steps too late for any checkpoint in the ring to be worth restoring. That is
-why the response is `reduce_lr` rather than a rollback: restoring a post-collapse checkpoint
-returns the model to the state it is already in and spends a recovery attempt to do it.
+**Accuracy is still 10.00%.** ARC sees the failure and does not reverse it — now by design
+rather than by limitation. The claim this earns is *"ARC reports a silent death instead of
+showing a green dashboard for 780 steps"* — not *"ARC recovers it."*
 
-The claim this earns is *"ARC reports a silent death instead of showing a green dashboard for
-780 steps"* — not *"ARC recovers it."* The 9.3x separation is also one seed on one workload and
-has not yet been through the four-learning-rate sweep, which is the standard the two deleted
-rules failed.
+That is the honest ceiling of this rule, and the reason `grad_flow_ratio` is the highest-value
+open item: it separated the same pair 266 steps earlier (healthy 1.36–3.10 throughout, dead
+50.11 at step 50 and non-finite from step 75), which is early enough that the ring buffer still
+holds a pre-collapse checkpoint. Detection that early is the only route to an intervention worth
+attempting.
 
 ---
 
@@ -288,6 +380,63 @@ That is worse than the original defect: a wrong detector is a bug, a test that c
 process failure. Both are fixed — the fixture is now verified to exceed 1e6 at step 10 in plain
 PyTorch *before* being used to test detection, and the assertion checks the failure `kind` rather
 than merely that something fired.
+
+---
+
+## 4b. The rank rule fired for the first time, and cost 44 points
+
+The sweep run to *confirm* the plateau fix found the same defect in the last structural rule
+that could still act. This is the shipped sweep — the one in `experiment_ab.json`.
+
+| peak LR | baseline | active | interventions | ARC effect |
+| ---: | ---: | ---: | ---: | ---: |
+| 0.03 | 87.53% | 87.22% | 0 | −0.31pp |
+| 0.10 | 87.49% | 87.73% | 0 | +0.24pp |
+| 0.25 | 10.00% | 10.00% | 0 | **0.00pp** |
+| 0.50 | 75.18% | 30.84% | 3 | **−44.34pp** |
+
+**The plateau fix worked.** `loss_plateau` fired at step 316 in both `lr=0.5` arms and at steps
+315/330 in both `lr=0.25` arms, and took no action in any of them. `lr=0.25` is the cleanest
+demonstration: both arms collapsed to chance and landed on *exactly* the same number, which is
+what a report-only detector must produce — no arm difference is possible when nothing is done.
+
+**`representation_collapse` did the damage instead.** It had never fired in any previous
+validation run. Here it fired in both `lr=0.5` arms, and the arm allowed to act on it was
+rolled back and cut three times:
+
+| epoch | baseline (no action) | active (3 × `rollback_and_reduce_lr`) |
+| ---: | :--- | :--- |
+| 3 | 10.00%, lr 4.04e-01 | 10.00%, lr 4.04e-01 |
+| 4 | **19.35%**, lr 3.34e-01 | 10.00%, lr 3.34e-01 |
+| 5 | 28.32%, lr 2.56e-01 | 21.44%, lr **3.20e-02** |
+| 10 | **75.18%** | **30.84%** |
+
+The mechanism is identical to §2's plateau finding, which is what makes it worth reporting
+rather than filing as a one-off. The control arm sat at chance for three epochs and escaped
+when cosine decay lowered the learning rate on its own. The intervened arm was cut to an order
+of magnitude below the value at which that escape happened, and never got back. The rollback
+contributes nothing either: every checkpoint in the ring is from inside the collapsed region,
+which is where the model already is.
+
+**So no structural rule acts any more.** Four rules have now been given the power to steer a
+run on a structural signal. Two fired on healthy runs and were deleted; two damaged failing
+runs and are now report-only. That is a complete record of the attempts, not a selection of
+them, and the pattern across all four is the actual result:
+
+> A signal that distinguishes a healthy run from a failing one still does not tell you what to
+> do about it. Every response available here — lower the learning rate, restore a checkpoint —
+> assumes the run needs to be slowed down or moved back. A run stuck at chance needs neither.
+> It needs large steps to escape, which is exactly what both responses remove.
+
+What still intervenes is a non-finite or exploded loss and a gradient norm above 50 — both
+verified working, both reading the loss and gradient directly rather than a structural proxy.
+
+**One caveat on the `lr=0.25` pair, stated because it cuts against the table.** In the previous
+sweep that configuration finished at 86.83% / 87.75%; here both arms collapsed to chance. Same
+seed, same data order, same code. That is the run-to-run variance described in §5 arriving at
+full force, and it is the reason the `0.00pp` delta on that row is the honest number to quote
+rather than evidence of anything. The `−44.34pp` row is different in kind: the two arms diverge
+*within* the run, at the step the intervention lands, and the per-epoch trace shows it.
 
 ---
 

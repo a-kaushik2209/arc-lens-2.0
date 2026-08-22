@@ -114,6 +114,8 @@ function loadHelpers() {
     /const KIND_LABELS = \{[\s\S]*?\};/,
     /function shortKind\([^\n]*\n?[^\n]*\}/,
     /function shortAction\([\s\S]*?\n\}/,
+    /const REPORT_ONLY_KINDS = new Set\([^\n]+\);/,
+    /function isReportOnly\([^\n]*\}/,
     /const RISK_COLORS = [^\n]+/,
   ];
   let source = "";
@@ -122,7 +124,7 @@ function loadHelpers() {
     assert.ok(match, `could not extract ${pattern}`);
     source += match[0] + "\n";
   }
-  source += "\nmodule.exports = { applyGpuRate, escapeText, shortKind, shortAction, RISK_COLORS, getRate: () => ({ gpuRate, gpuRateSource, gpuWatts }) };";
+  source += "\nmodule.exports = { applyGpuRate, escapeText, shortKind, shortAction, isReportOnly, RISK_COLORS, getRate: () => ({ gpuRate, gpuRateSource, gpuWatts }) };";
   const sandbox = { module: { exports: {} } };
   sandbox.exports = sandbox.module.exports;
   vm.createContext(sandbox);
@@ -179,6 +181,19 @@ test("failure kinds and actions get readable chart labels", () => {
   assert.equal(h.shortKind("something_new"), "something_new");
   assert.equal(h.shortAction("rollback_and_reduce_lr"), "rollback + LR");
   assert.equal(h.shortAction("reduce_lr"), "LR down");
+});
+
+test("the report-only kinds match the harness", () => {
+  // Mirrors REPORT_ONLY_KINDS in python/_arc_bootstrap.py. A report-only kind
+  // emits failure_detected with no intervention event ever following, so the
+  // status strip must not promise "attempting rollback / learning-rate
+  // reduction" — the run is about to continue untouched and the promise would
+  // sit on screen unfulfilled for the rest of the demo.
+  const h = loadHelpers();
+  assert.equal(h.isReportOnly("loss_plateau"), true);
+  assert.equal(h.isReportOnly("numerical"), false);
+  assert.equal(h.isReportOnly("representation_collapse"), false);
+  assert.equal(h.isReportOnly(undefined), false);
 });
 
 test("every risk label the backend can emit has a colour", () => {

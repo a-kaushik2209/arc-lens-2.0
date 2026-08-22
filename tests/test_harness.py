@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 import sys
+import types
 import unittest
 from pathlib import Path
 
@@ -306,8 +307,104 @@ class TestLossPlateau(unittest.TestCase):
 
         m = _arc_bootstrap.OptimizerMonitor.__new__(_arc_bootstrap.OptimizerMonitor)
         m.best_loss = float("inf")
+        m.opening_losses = []
         m.steps_without_improvement = 0
         return m, _arc_bootstrap
+
+    def test_a_converged_run_is_not_a_plateau(self):
+        """Convergence *is* a plateau, and the first version of this rule fired on it.
+
+        The counter keys off the best-ever batch loss, so as a run succeeds its
+        own record gets harder to beat and the stalls grow without bound. The
+        780-step fixture above never revealed that. A 10-epoch A/B did,
+        immediately: the `lr=0.03` arm reached **87.5% validation accuracy** and
+        tripped this rule twice.
+
+        No patience value fixes it — the stall length is unbounded on a healthy
+        run. What separates the cases is whether the run ever got anywhere:
+
+            arm              first loss   best loss   best/first
+            lr=0.03 healthy     2.3018      0.6233       0.271
+            lr=0.50 dead        2.3221      2.0632       0.888
+
+        This is the regression test for that, and it runs 5x longer than the
+        original fixture precisely because the original length is what hid the
+        bug.
+        """
+        import random
+
+        m, mod = self._monitor()
+        rng = random.Random(7)
+        # A converged run: big early gains, then a long noisy flat tail that
+        # never beats its own record again.
+        losses = [2.30 * (0.25 ** (i / 600)) for i in range(600)]
+        losses += [0.58 + rng.uniform(0.0, 0.35) for _ in range(3300)]
+        for i, loss in enumerate(losses, start=1):
+            self.assertIsNone(
+                m.check_plateau(loss),
+                f"plateau fired at step {i} on a run that improved from its opening loss",
+            )
+        # And the stall really did exceed the patience — otherwise this test
+        # would pass for the wrong reason and prove nothing.
+        self.assertGreater(len(losses), mod.LOSS_PLATEAU_PATIENCE * 3)
+
+    def test_one_unlucky_opening_batch_does_not_suppress_a_real_death(self):
+        """The progress reference is a median, not a single sample.
+
+        The guard asks "did this run ever get anywhere", measured against its
+        opening loss. Taken from one batch that is a sample of size one: an
+        unlucky high first batch makes a dead run look like it improved
+        enormously, and the guard then suppresses a true positive — the rule
+        goes quiet on exactly the failure it exists to catch.
+
+        Here the run opens with a 9.5 spike and then dies at ln(10) forever.
+        Against the single first loss the ratio is 2.06/9.5 = 0.22, comfortably
+        under the 0.60 threshold, and the rule would stay silent. Against the
+        median of the opening samples it is ~0.89, and the death is caught.
+        """
+        m, mod = self._monitor()
+        losses = [9.5] + self._dead_losses(3900)[1:]
+        fired = None
+        for i, loss in enumerate(losses, start=1):
+            if m.check_plateau(loss) is not None:
+                fired = i
+                break
+        self.assertIsNotNone(
+            fired,
+            "a single high opening batch suppressed detection of a dead run",
+        )
+        self.assertLess(fired, 400)
+
+    def test_a_zero_opening_loss_does_not_raise(self):
+        """A degenerate opening reference must not throw inside failure handling.
+
+        The progress ratio divides by the opening loss. If that opening is
+        exactly 0.0 the guard's own `opening > 0` check skips the division, and
+        the message below it then divided by zero anyway — raising
+        ZeroDivisionError on the path that runs while a failure is being
+        handled, which is the worst place in the harness to throw.
+
+        Found by reading the diff, not by a failing run.
+        """
+        m, _ = self._monitor()
+        result = None
+        for _ in range(1200):
+            result = m.check_plateau(0.0)
+            if result is not None:
+                break
+        self.assertIsNotNone(result, "a run pinned at exactly zero still stalls")
+        self.assertEqual(result[0], "loss_plateau")
+
+    def test_a_dead_run_still_fires_with_the_progress_guard(self):
+        """The guard must not disarm the rule it is guarding."""
+        m, _ = self._monitor()
+        fired = None
+        for i, loss in enumerate(self._dead_losses(3900), start=1):
+            if m.check_plateau(loss) is not None:
+                fired = i
+                break
+        self.assertIsNotNone(fired, "a run pinned at ln(10) must still be caught")
+        self.assertLess(fired, 400)
 
     def _healthy_losses(self, n=780):
         """Falling loss with heavy per-batch noise, as measured on lr=0.03.
@@ -381,6 +478,63 @@ class TestLossPlateau(unittest.TestCase):
                 break
         self.assertEqual(m.steps_without_improvement, 0)
 
+    def test_a_nonfinite_signal_is_reported_not_silently_dropped(self):
+        """A signal going inf is information, and it was being discarded.
+
+        `grad_flow_ratio` is late-layer gradient norm over early-layer, and it
+        returns inf exactly when the early layers stop receiving gradient at
+        all. Measured on a real pair of runs, the healthy arm stayed inside
+        1.36-3.10 for all 16 samples while the dead arm hit 50.11 at step 50 and
+        went non-finite from step 75 on. `_finite()` was correctly refusing to
+        put inf into the JSON, which left a gap on the chart precisely where the
+        signal was loudest.
+
+        The flag carries the fact without inventing a number — a sentinel value
+        would be indistinguishable from a real measurement once plotted.
+        """
+        import _arc_bootstrap
+
+        m = _arc_bootstrap.OptimizerMonitor.__new__(_arc_bootstrap.OptimizerMonitor)
+
+        class FakeSnapshot:
+            signals = {
+                "gradient.global": {
+                    "total_grad_norm_l2": 0.07,
+                    "grad_flow_ratio": float("inf"),
+                },
+                "weight.global": {"mean_effective_rank": 25.1},
+            }
+
+        class FakeCollector:
+            def step(self): pass
+            def collect(self): return FakeSnapshot()
+
+        m.collector = FakeCollector()
+        adv = m.collect_advanced()
+        self.assertIsNotNone(adv)
+        self.assertNotIn("grad_flow_ratio", adv, "inf must never reach the JSON")
+        self.assertIn("grad_flow_ratio", adv.get("nonfinite", []),
+                      "the divergence must still be reported")
+        self.assertEqual(adv["effective_rank"], 25.1, "finite signals are unaffected")
+
+    def test_the_agent_snapshot_survives_a_nonfinite_flag(self):
+        """`nonfinite` is a list, and the snapshot rounds every value.
+
+        This runs while a failure is already being handled, which is the worst
+        possible place to raise a TypeError.
+        """
+        import arc_agent
+
+        snap = arc_agent._snapshot(
+            step=100, epoch=1, loss=2.30, grad_norm=0.07, lr=0.5,
+            loss_history=[2.30, 2.31, 2.30],
+            advanced={"effective_rank": 25.1, "nonfinite": ["grad_flow_ratio"]},
+        )
+        tel = snap["advanced_telemetry"]
+        self.assertEqual(tel["nonfinite"], ["grad_flow_ratio"])
+        self.assertEqual(tel["effective_rank"], 25.1)
+        json.dumps(snap)  # must stay serialisable
+
     def test_an_absent_loss_is_not_a_plateau(self):
         """NaN reaches here when the loss could not be observed at all.
 
@@ -392,6 +546,156 @@ class TestLossPlateau(unittest.TestCase):
         for _ in range(2000):
             self.assertIsNone(m.check_plateau(float("nan")))
         self.assertEqual(m.steps_without_improvement, 0)
+
+
+class TestPlateauReportsWithoutActing(unittest.TestCase):
+    """Detecting the plateau was right. Acting on it destroyed the run.
+
+    The four-LR A/B measured the lr=0.5 pair (seed 1234, 10 epochs, identical
+    data order). Both arms sat at chance — 10.00% — for four epochs. Then:
+
+        epoch    baseline (no action)     active (3x reduce_lr from step 316)
+            5    26.73%  lr=2.56e-01      10.00%  lr=3.20e-02
+           10    73.19%                   10.00%  loss 2.3026 = ln(10)
+
+    The control arm escaped once cosine decay walked the LR down on its own.
+    The arm ARC "helped" never did: cutting the LR at the moment of the plateau
+    removed the only steps large enough to carry the weights out of the dead
+    region. A -63.19pp delta, in ARC's disfavour, from a correct detection.
+
+    So `loss_plateau` is report-only, and these tests hold it there. The trap is
+    that reporting is not automatically passive — `_handle_failure` ends by
+    calling `optimizer.zero_grad()`, which discards the user's update and is the
+    single most consequential intervention available on a diverging run.
+    """
+
+    def _fire(self, mode="active", attempts=0):
+        """Drive _handle_failure for a plateau and record what it touched."""
+        import _arc_bootstrap
+
+        class Optimizer:
+            def __init__(self):
+                self.zeroed = 0
+                self.param_groups = [{"lr": 0.5}]
+
+            def zero_grad(self, set_to_none=False):
+                self.zeroed += 1
+
+        events = []
+        opt = Optimizer()
+        original_emit = _arc_bootstrap.emit
+        original_enabled = _arc_bootstrap.INTERVENTIONS_ENABLED
+        original_state = _arc_bootstrap.STATE
+        _arc_bootstrap.emit = events.append
+        _arc_bootstrap.INTERVENTIONS_ENABLED = (mode == "active")
+        _arc_bootstrap.STATE = _arc_bootstrap._RunState()
+        _arc_bootstrap.STATE.attempts_by_kind["loss_plateau"] = attempts
+        try:
+            _arc_bootstrap._handle_failure(
+                opt, None, step=316, loss_val=2.3026, grad_norm=0.07, lr=0.5,
+                advanced={}, kind="loss_plateau",
+                reason="loss has failed to improve for 300 consecutive steps",
+            )
+            result = types.SimpleNamespace(
+                events=events,
+                optimizer=opt,
+                attempts=_arc_bootstrap.STATE.attempts_by_kind["loss_plateau"],
+                interventions=_arc_bootstrap.STATE.intervention_count,
+                # Read before STATE is restored, or the assertion checks the
+                # wrong object and passes for the wrong reason.
+                abandoned=set(_arc_bootstrap.STATE.abandoned_kinds),
+                silenced=set(_arc_bootstrap.STATE.silenced_kinds),
+            )
+        finally:
+            _arc_bootstrap.emit = original_emit
+            _arc_bootstrap.INTERVENTIONS_ENABLED = original_enabled
+            _arc_bootstrap.STATE = original_state
+        return result
+
+    def test_the_plateau_is_still_reported(self):
+        """Report-only must not mean silent. The detection was the part that worked."""
+        detected = [e for e in self._fire().events if e.get("type") == "failure_detected"]
+        self.assertEqual(len(detected), 1)
+        self.assertEqual(detected[0]["kind"], "loss_plateau")
+        self.assertEqual(detected[0]["step"], 316)
+
+    def test_no_intervention_is_emitted(self):
+        r = self._fire()
+        self.assertEqual(r.interventions, 0)
+        self.assertEqual([e for e in r.events if e.get("type") == "intervention"], [])
+
+    def test_the_users_update_is_not_discarded(self):
+        """The regression that would silently reintroduce the -63pp result.
+
+        zero_grad() before the caller's own optimizer.step() makes that step a
+        no-op. A rule that claims to change nothing while dropping updates is
+        indistinguishable, in the run's outcome, from one that intervenes.
+        """
+        r = self._fire()
+        self.assertEqual(r.optimizer.zeroed, 0)
+        self.assertEqual(r.optimizer.param_groups[0]["lr"], 0.5, "LR must be untouched")
+
+    def test_both_ab_arms_behave_identically(self):
+        """A report-only kind cannot produce an arm difference — that is the point.
+
+        The gate sits above the INTERVENTIONS_ENABLED check precisely so the
+        control arm and the active arm run the same code for this kind.
+        """
+        active = self._fire(mode="active")
+        baseline = self._fire(mode="baseline")
+        self.assertEqual(active.interventions, baseline.interventions, 0)
+        self.assertEqual(active.optimizer.zeroed, baseline.optimizer.zeroed, 0)
+        self.assertEqual(
+            [e.get("type") for e in active.events], [e.get("type") for e in baseline.events],
+            "the two arms must emit the same event sequence for a report-only kind",
+        )
+
+    def test_repeat_reports_are_capped(self):
+        """A dead run stays dead, so the rule re-fires forever. Say it, then stop."""
+        import _arc_bootstrap
+
+        done = [e for e in self._fire(attempts=_arc_bootstrap.MAX_ATTEMPTS_PER_KIND).events
+                if e.get("type") == "detection_silenced"]
+        self.assertEqual(len(done), 1)
+        self.assertNotIn(
+            "rollback", done[0]["message"].lower(),
+            "the report-only path never rolled anything back; the message must not claim it did",
+        )
+
+    def test_a_reported_plateau_is_never_called_unrecoverable(self):
+        """The claim ARC has not earned, and would have been wrong to make.
+
+        `unrecoverable` means "every checkpoint is degenerate, stop paying for
+        this GPU". ARC can say that after its recoveries fail. It cannot say it
+        having taken no action — and on the measured lr=0.5 pair it would have
+        been false: the arm left alone reported this same plateau and finished
+        at 73.19%. A user who killed that run on ARC's advice would have thrown
+        away a run that was coming back.
+        """
+        import _arc_bootstrap
+
+        events = self._fire(attempts=_arc_bootstrap.MAX_ATTEMPTS_PER_KIND).events
+        self.assertEqual([e for e in events if e.get("type") == "unrecoverable"], [])
+
+    def test_the_run_summary_does_not_list_it_as_unrecoverable(self):
+        """`run_summary.unrecoverable` is what the A/B table reads for its verdict.
+
+        Report-only kinds are tracked in a separate set for exactly this reason:
+        publishing one there would have labelled the recovering 73.19% control
+        arm "unrecoverable" in the results table.
+        """
+        import _arc_bootstrap
+
+        r = self._fire(attempts=_arc_bootstrap.MAX_ATTEMPTS_PER_KIND)
+        self.assertEqual(r.abandoned, set(), "must not reach the run summary's unrecoverable list")
+        self.assertEqual(r.silenced, {"loss_plateau"}, "but it must still stop repeating")
+
+    def test_the_agents_response_map_agrees(self):
+        """Two files encode this decision. Disagreement is how it comes back."""
+        import _arc_bootstrap, arc_agent
+
+        for kind in _arc_bootstrap.REPORT_ONLY_KINDS:
+            self.assertEqual(arc_agent.STRUCTURAL_RESPONSES[kind][1], "report")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -731,6 +1035,32 @@ finite = bool(torch.isfinite(model.weight).all())
 print("WEIGHTS_FINITE", finite)
 """
 
+SCRIPT_PLATEAU = """
+import torch, torch.nn as nn
+torch.manual_seed(0)
+model = nn.Linear(4, 2)
+opt = torch.optim.SGD(model.parameters(), lr=0.05)
+before = model.weight.detach().clone()
+x = torch.randn(8, 4)
+for step in range(60):
+    opt.zero_grad(set_to_none=True)
+    # Finite, constant, never improving: the best-ever counter never resets and
+    # the progress ratio stays at 1.0. That is the shape of a silent death.
+    # It has to run through backward(), because that is where the harness
+    # observes the loss at all — multiplying by zero keeps the graph and pins
+    # the value.
+    loss = model(x).sum() * 0.0 + 2.3026
+    loss.backward()
+    # Overwrite the (zero) gradient with a real one. A constant loss carries no
+    # gradient of its own, and a zero gradient would leave this fixture unable
+    # to tell "ARC left my update alone" from "ARC discarded it" — which is the
+    # thing being tested.
+    for p in model.parameters():
+        p.grad = torch.full_like(p, 0.01)
+    opt.step()
+print("MOVED", bool((model.weight.detach() - before).abs().max() > 1e-6))
+"""
+
 SCRIPT_ACCUM = """
 import torch, torch.nn as nn, torch.nn.functional as F
 torch.manual_seed(0)
@@ -808,6 +1138,41 @@ class TestIntegration(unittest.TestCase):
         self.assertTrue(interventions, "a detected failure must produce an intervention")
         self.assertLessEqual(failures[0]["step"], interventions[0]["step"],
                              "the failure must precede its remedy")
+
+    def test_a_plateau_is_reported_through_the_real_harness_without_acting(self):
+        """End to end: detection reaches the log, nothing reaches the model.
+
+        The unit tests drive `_handle_failure` directly. This one runs a real
+        script through `runner.py`, so it also covers the dispatch that decides
+        a plateau happened and the wiring between the two — the layer where a
+        report-only kind could still fall through to the recovery agent's
+        fallback, which rolls back and cuts the LR.
+
+        Patience is lowered by env var rather than by waiting 300 steps; the
+        rule's thresholds are configurable precisely so they can be tested.
+        """
+        events, stdout = run_harness(SCRIPT_PLATEAU, {
+            "ARC_PLATEAU_PATIENCE": "10",
+            "ARC_PLATEAU_OPENING": "2",
+        })
+        failures = [e for e in events if e["type"] == "failure_detected"]
+        self.assertTrue(failures, "a run that never improves must be detected")
+        self.assertEqual(failures[0]["kind"], "loss_plateau",
+                         f"expected a plateau, got {failures[0].get('kind')}")
+
+        self.assertEqual([e for e in events if e["type"] == "intervention"], [],
+                         "a report-only kind must produce no intervention")
+        self.assertEqual([e for e in events if e["type"] == "unrecoverable"], [],
+                         "ARC took no action here, so it cannot judge the run unrecoverable")
+
+        # The user's own updates must still land. If ARC zeroed the gradients on
+        # the way out of the report path, the weights never move and this prints
+        # False — silently turning "we changed nothing" into a false claim.
+        self.assertIn("MOVED True", stdout,
+                      "the training script's updates must reach the weights untouched")
+
+        summary = next(e for e in events if e["type"] == "run_summary")
+        self.assertEqual(summary["unrecoverable"], [])
 
     def test_intervention_survives_the_scheduler(self):
         events, stdout = run_harness(SCRIPT_DIVERGE)
