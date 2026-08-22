@@ -408,7 +408,7 @@ Both fixed in `arc-training` (same author, AGPL). A third fix there —
 was a large part of the overhead in 2.2.
 
 ### 2.6 Test the pure functions
-**Effort: 3 h · Impact: medium — Status: done, 122 tests plus CI**
+**Effort: 3 h · Impact: medium — Status: done, 123 tests plus CI**
 
 See [L-6](SECURITY_AUDIT.md).
 
@@ -517,7 +517,7 @@ path to real usage than the VS Code extension.
 | 2.3 | Fix traceback line numbers | 2 h | Med-High | Trust | ✅ Done (`runpy`, zero injected lines) |
 | 2.4 | Bound checkpoint memory | 3 h | Med-High | Trust | ✅ Done (host-resident store, budget reported) |
 | 2.5 | Visible degradation | 2 h | Med-High | Trust | ✅ Done — found 2 real upstream bugs |
-| 2.6 | Tests + CI | 3 h | Medium | Trust | ✅ Done (122 tests, 3 CI jobs incl. secret scan) |
+| 2.6 | Tests + CI | 3 h | Medium | Trust | ✅ Done (123 tests, 3 CI jobs incl. secret scan) |
 | — | **Structural detection reachable at all** *(not in the original plan)* | — | Medium | Trust | ⚠️ Done, then mostly walked back — see below |
 | 3.1 | Hybrid LLM recovery loop | 2 d | High | Later | Open — deliberate, see below |
 | 3.2 | DDP / FSDP support | 1 w | High | Later | Open — deliberate, see below |

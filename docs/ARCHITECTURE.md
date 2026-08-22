@@ -51,7 +51,7 @@ arc-lens/
 ├── media/
 │   ├── dashboard.html            Markup, CSS, ECharts setup, event handling
 │   └── vendor/echarts.min.js     Vendored — the dashboard renders with no network
-└── tests/                        122 tests across six suites
+└── tests/                        123 tests across six suites
 ```
 
 The Python sources ship as files. They were previously base64-encoded into `extension.js`,

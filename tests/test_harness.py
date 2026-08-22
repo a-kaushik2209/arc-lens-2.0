@@ -8,6 +8,7 @@ The GPU-shaped tests fall back to CPU automatically. The integration test needs
 torch; it skips cleanly when torch is absent rather than failing.
 """
 
+import itertools
 import json
 import os
 import subprocess
@@ -18,6 +19,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 PY_DIR = REPO / "python"
+_WORKLOAD_SEQ = itertools.count()
 sys.path.insert(0, str(PY_DIR))
 
 try:
@@ -1117,7 +1119,13 @@ for update in range(5):
 
 def run_harness(source: str, env_extra=None):
     """Run a script through runner.py and return the parsed event stream."""
-    script = REPO / ".test_workload.py"
+    # Unique per call. This used to be a fixed `.test_workload.py`, which two
+    # concurrent runs of this suite would overwrite for each other — one test's
+    # script executing under another's assertions, producing failures that look
+    # like real regressions and vanish on a rerun. It cost two false alarms
+    # before it was tracked down. The name has to stay inside REPO so the
+    # traceback-line-number tests still see a path they expect.
+    script = REPO / f".test_workload_{os.getpid()}_{next(_WORKLOAD_SEQ)}.py"
     script.write_text(source, encoding="utf-8")
     env = dict(os.environ)
     env["PYTHONUNBUFFERED"] = "1"
