@@ -59,6 +59,49 @@ kind worth putting in front of a judge who will check.
 
 ---
 
+## Provenance of every figure the dashboard displays
+
+Audited value by value on 2026-08-22. The standard is the one this project set
+for itself in [`SECURITY_AUDIT.md`](SECURITY_AUDIT.md) C-2, where four charts
+were found rendering `Math.random()` output styled identically to measurements:
+**a number that looks like a measurement must be one, and an absent value must
+read as absent.** The same table is in the dashboard itself, under *How each
+figure is arrived at*, so a reader can check the claim without leaving the page.
+
+| Figure | Basis | How it is arrived at |
+|:---|:---|:---|
+| Loss, gradient norm, LR, GPU memory, step, epoch | **measured** | Read straight off the harness event. Absent fields render `—`, never `0` |
+| Risk score and label | **measured** | Computed by `_risk_score()` in the harness. An unscored event renders `score —` |
+| Steps not re-run | **measured** | Highest reported step minus the steps the rollback discarded, parsed from the intervention's own detail line |
+| Time not re-spent | **derived** | Wall clock since run start × the fraction of steps that survived the rollback |
+| Compute not re-bought | **estimate** | Time × hourly rate. Your configured `arcAgent.gpuHourlyRate` if set, else a published on-demand list price matched to the reported GPU. Source named on screen |
+| Energy | **estimate** | Time × tier-typical board wattage. No power sensor is read |
+| Telemetry not sent | **estimate** | Suppressed emissions (exact) × 277 B (measured mean, §2: 108,053 ÷ 390) |
+| Checkpoint storage | **measured** | Byte counts reported by the harness's own checkpoint store |
+
+**Four fabrications were found and fixed in this audit**, all of them the C-2
+pattern rather than deliberate invention:
+
+* an absent `lr` rendered `0.00e0` and an absent `gpu_mem_mb` rendered `0.0 MB`.
+  Both fields also have legitimate zero values — the cosine schedule ends at
+  `lr=0`, a CPU run reports 0 MB — so the test now checks the field's
+  *presence*, not its truthiness.
+* an absent risk score rendered `score 0.00`, which reads as **safe**. That is
+  fabricating in the one direction that matters on a gauge whose purpose is to
+  say when a run is not safe.
+* the telemetry tile displayed a number with **no stated basis at all**, and
+  could over-report without bound on a long run because it derived the
+  suppressed-emission count from an array that is pruned at 100,000 entries.
+
+**What is deliberately not claimed.** The dollar and energy figures are
+assumptions and are labelled as such every time they appear — an unlabelled
+dollar amount would be the same class of problem C-2 was about. The telemetry
+figure is the only tile whose *magnitude* is estimated rather than counted, and
+it says so on screen; when nothing is coalesced it reads `0 B` with an
+explanation, so a zero tile is legible as "switched off" rather than "broken".
+
+---
+
 ## Test environment
 
 | | |

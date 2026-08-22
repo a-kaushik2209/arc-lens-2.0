@@ -338,6 +338,31 @@ header {
 .risk-progress-bar { width: 100%; height: 3px; background: var(--grid-line); border-radius: 2px; margin-top: 8px; overflow: hidden; }
 .risk-progress-fill { height: 100%; width: 0%; background: var(--accent-green); transition: width 0.3s ease, background-color 0.3s ease; }
 
+/* Provenance disclosure — every figure on the panel, and how it is arrived at.
+   In the page rather than only in a doc, because the claim a reader most wants
+   to check is the one they are looking at. */
+.prov { margin-top: 12px; }
+.prov > summary {
+  cursor: pointer; font-size: 11px; color: var(--text-secondary);
+  letter-spacing: 0.03em; list-style: revert;
+}
+.prov > summary:hover { color: var(--text-primary); }
+.prov table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 11px; }
+.prov caption { text-align: left; color: var(--text-tertiary); font-size: 10.5px; padding-bottom: 6px; }
+.prov th, .prov td {
+  text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--panel-border);
+  vertical-align: top; color: var(--text-secondary);
+}
+.prov th { color: var(--text-primary); font-weight: 600; white-space: nowrap; }
+.prov td:first-child { white-space: nowrap; color: var(--text-primary); font-weight: 600; }
+.prov .tag {
+  display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 9.5px;
+  font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+}
+.prov .tag-measured { background: rgba(34,197,94,0.12); color: var(--accent-green); }
+.prov .tag-derived { background: rgba(59,130,246,0.12); color: var(--accent-blue); }
+.prov .tag-estimate { background: rgba(245,158,11,0.12); color: var(--status-degraded-text); }
+
 /* Resources Conserved — the challenge's own five dimensions, counterfactual.
    Everything else on this dashboard reports what the run is doing; this
    reports what the user did not have to spend. */
@@ -596,6 +621,47 @@ header {
       </div>
     </div>
     <div class="saved-note" id="saved-note">—</div>
+    <details class="prov">
+      <summary>How each figure is arrived at</summary>
+      <table>
+        <caption>
+          <span class="tag tag-measured">measured</span> read directly from the run &middot;
+          <span class="tag tag-derived">derived</span> arithmetic on measured values &middot;
+          <span class="tag tag-estimate">estimate</span> uses a figure from outside this run
+        </caption>
+        <thead>
+          <tr><th scope="col">Figure</th><th scope="col">Basis</th><th scope="col">How</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Steps</td>
+            <td><span class="tag tag-measured">measured</span></td>
+            <td>Highest step number reported by the harness, minus the steps the rollback discarded (parsed from the intervention's own detail line). Discarded steps are never counted as saved.</td>
+          </tr>
+          <tr>
+            <td>Time</td>
+            <td><span class="tag tag-derived">derived</span></td>
+            <td>Wall clock since the run started, scaled by the fraction of steps that survived the rollback. Not a separate measurement &mdash; it is elapsed time apportioned by surviving work.</td>
+          </tr>
+          <tr>
+            <td>Compute&nbsp;($)</td>
+            <td><span class="tag tag-estimate">estimate</span></td>
+            <td>Time above &times; an hourly rate. The rate is <em>your</em> configured <code>arcAgent.gpuHourlyRate</code> if set; otherwise a published on-demand list price matched to the GPU the run reported. The source is always named next to the figure.</td>
+          </tr>
+          <tr>
+            <td>Energy</td>
+            <td><span class="tag tag-estimate">estimate</span></td>
+            <td>Time above &times; a typical board wattage for the detected GPU's tier. It is a tier-typical number, not a measurement of this board &mdash; nothing here reads a power sensor.</td>
+          </tr>
+          <tr>
+            <td>Telemetry</td>
+            <td><span class="tag tag-estimate">estimate</span></td>
+            <td>Suppressed emissions &times; 277&nbsp;B. The count is exact (step numbers keep rising while only sampled steps emit). The byte size is the measured mean over a 390-step reference run &mdash; real events vary, since those carrying structural signals are larger.</td>
+          </tr>
+        </tbody>
+      </table>
+    </details>
+
   </section>
 
   <!-- Compute-savings ledger: hidden until the first real intervention -->
@@ -1963,8 +2029,13 @@ function handleMessage(msg) {
       // this dashboard already refuses to have anywhere else.
       const wasteEl = document.getElementById('unrecoverable-waste');
       if (typeof msg.elapsed_seconds === 'number') {
-        const mins = Math.floor(msg.elapsed_seconds / 60);
-        const secs = Math.round(msg.elapsed_seconds % 60);
+        // Round to whole seconds first, then split. Flooring the minutes while
+        // rounding the remainder independently renders "1m 60s" for 119.6s, and
+        // the harness reports this to three decimals so fractional values are
+        // the norm. Same defect was fixed in reportBuilder.ts.
+        const whole = Math.round(msg.elapsed_seconds);
+        const mins = Math.floor(whole / 60);
+        const secs = whole % 60;
         const hours = msg.elapsed_seconds / 3600;
         const dollars = hours * gpuRate;
         const kwh = hours * (gpuWatts / 1000);

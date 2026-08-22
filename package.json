@@ -2,7 +2,7 @@
   "name": "arc-lens",
   "displayName": "ARC Lens - Resilient ML Trainer",
   "description": "A real-time PyTorch training dashboard and automated recovery controller built for the ARC framework, featuring weight rollbacks, learning rate adaptation, and AI failure diagnostics.",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "publisher": "arclens",
   "repository": {
     "type": "git",
