@@ -1452,16 +1452,29 @@ let savedMode = 'preserved';
 let savedDetectStep = 0;
 let savedDetectTime = 0;
 
-// Bytes a coalesced telemetry stream did not send. The harness emits one metric
-// event per *sampled* step; the step numbers themselves keep counting, so the
-// gap between the highest step seen and the number of events received is the
-// number of emissions skipped. 277 bytes is the measured mean event size over
-// the 390-step run in docs/WASTE_REDUCTION.md (108,053 bytes / 390 events).
+// Bytes a coalesced telemetry stream did not send.
+//
+// This is the one figure on the panel that is an *estimate* rather than a
+// measurement, and it is labelled as such on screen. The count of skipped
+// emissions is exact — the harness emits one event per sampled step while the
+// step numbers keep counting, so (highest step seen - events received) is
+// precisely how many emissions were suppressed. The byte size is not: real
+// events vary, because the ones carrying `advanced` payloads are larger.
+// 277 B is the measured mean over the 390-step run in
+// docs/WASTE_REDUCTION.md (108,053 bytes / 390 events = 277.06).
 const MEAN_METRIC_BYTES = 277;
+
+// Counted separately from the `steps` array, which is pruned at MAX_DATAPOINTS.
+// Using steps.length would make the estimate climb without bound once a run
+// passed 100,000 events: the array stops growing while the step numbers keep
+// rising, so suppressed-emission count would absorb every pruned entry and
+// report bandwidth "saved" that was in fact sent.
+let metricEventsReceived = 0;
+
 function bytesNotSent() {
-  if (!steps.length) return 0;
+  if (!steps.length || metricEventsReceived === 0) return 0;
   const highest = steps[steps.length - 1];
-  return Math.max(0, highest - steps.length) * MEAN_METRIC_BYTES;
+  return Math.max(0, highest - metricEventsReceived) * MEAN_METRIC_BYTES;
 }
 
 // A short run at 3 dp reads "0.000 kWh", which looks like a broken tile rather
@@ -1470,6 +1483,18 @@ function fmtEnergy(kwh) {
   if (kwh >= 0.01) return kwh.toFixed(3) + ' kWh';
   if (kwh >= 1e-5) return (kwh * 1000).toFixed(2) + ' Wh';
   return (kwh * 3.6e6).toFixed(1) + ' J';
+}
+
+// Says plainly what the telemetry tile is, including when it is zero — a tile
+// reading 0 B with no explanation invites the reader to assume it is broken
+// rather than switched off.
+function telemetryBasis() {
+  const skipped = steps.length ? Math.max(0, steps[steps.length - 1] - metricEventsReceived) : 0;
+  if (skipped === 0) {
+    return 'Telemetry: every step emitted (arcAgent.telemetryEvery = 1), so nothing was saved there.';
+  }
+  return `Telemetry is an estimate: ${skipped.toLocaleString()} emissions suppressed ` +
+         `x ${MEAN_METRIC_BYTES} B measured mean event size.`;
 }
 
 function fmtBytes(b) {
@@ -1519,7 +1544,8 @@ function renderSaved() {
       `response has been shown to help. Everything above is compute spent after ` +
       `the diagnosis was already known. <strong>Stopping now saves the rest.</strong>` +
       `<br><span class="assumption">Priced at $${gpuRate.toFixed(2)}/hr ` +
-      `(${escapeText(gpuRateSource)}) and ${gpuWatts}W typical for this tier.</span>`
+      `(${escapeText(gpuRateSource)}) and ${gpuWatts}W typical for this tier. ` +
+      `${telemetryBasis()}</span>`
     : `This run survived a failure that destroys the weights. Unattended, it ends ` +
       `here and the work above is gone.` +
     `<br><span class="assumption">The saving is against <em>this run dying</em>, ` +
@@ -1527,7 +1553,7 @@ function renderSaved() {
     `hyperparameter instead, and reach a better model. What ARC buys is a run ` +
     `that survives when nobody is watching. Priced at $${gpuRate.toFixed(2)}/hr ` +
     `(${escapeText(gpuRateSource)}) and ${gpuWatts}W typical for this tier; ` +
-    `rolled-back steps excluded.</span>`;
+    `rolled-back steps excluded. ${telemetryBasis()}</span>`;
 }
 
 function startSaved(lostSteps) {
@@ -1668,6 +1694,7 @@ function handleMessage(msg) {
       // "clearly show current status" requirement makes a correctness issue,
       // not a cosmetic one.
       window._arcNonfinite = {};
+      metricEventsReceived = 0;
       stopWasteCounter();
       stopRunMeter();
       stopPreservedMeter();
@@ -1731,6 +1758,7 @@ function handleMessage(msg) {
     }
 
     case 'metric': {
+      metricEventsReceived++;
       steps.push(msg.step);
       losses.push(msg.loss === null ? null : msg.loss);
       lrs.push(msg.lr);
@@ -1797,8 +1825,15 @@ function handleMessage(msg) {
       // flowing); showing "0.000" for an absent field would hide that.
       document.getElementById('val-grad').textContent =
         typeof msg.grad_norm === 'number' ? msg.grad_norm.toExponential(3) : '—';
-      document.getElementById('val-lr').textContent = msg.lr ? msg.lr.toExponential(2) : '0.00e0';
-      document.getElementById('val-gpu').textContent = `GPU: ${msg.gpu_mem_mb ? msg.gpu_mem_mb.toFixed(1) : '0.0'} MB`;
+      // Same rule as grad_norm above, and for the same reason: an absent field
+      // rendered "0.00e0" / "0.0 MB", which is a fabricated measurement rather
+      // than a gap. Both are also legitimately zero — the cosine schedule ends
+      // at lr=0, and a CPU run reports 0 MB of GPU memory — so the test has to
+      // be for the field's presence, not its truthiness.
+      document.getElementById('val-lr').textContent =
+        typeof msg.lr === 'number' ? msg.lr.toExponential(2) : '—';
+      document.getElementById('val-gpu').textContent =
+        typeof msg.gpu_mem_mb === 'number' ? `GPU: ${msg.gpu_mem_mb.toFixed(1)} MB` : 'GPU: —';
       document.getElementById('val-step').textContent = msg.step;
       document.getElementById('val-epoch').textContent = msg.epoch;
 
@@ -1818,7 +1853,11 @@ function handleMessage(msg) {
       document.getElementById('val-risk').textContent = msg.label;
       const riskColor = RISK_COLORS[msg.label] || 'var(--text-secondary)';
       document.getElementById('val-risk').style.color = riskColor;
-      document.getElementById('val-risk-score').textContent = `score ${(msg.score ?? 0).toFixed(2)}`;
+      // `?? 0` rendered an absent score as "score 0.00", which reads as *safe* —
+      // fabricating in the one direction that matters, since the whole point of
+      // the gauge is to say when a run is not safe. An unknown score says so.
+      document.getElementById('val-risk-score').textContent =
+        typeof msg.score === 'number' ? `score ${msg.score.toFixed(2)}` : 'score —';
       updateRiskGauge(msg.score, riskColor);
       // A calm reading while we're mid-recovery is the signal the run has
       // actually settled, not just that this one sample happened to be quiet —
