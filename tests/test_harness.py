@@ -590,6 +590,87 @@ class TestLossPlateau(unittest.TestCase):
         self.assertEqual(m.steps_without_improvement, 0)
 
 
+class TestRiskGaugeTracksTheStall(unittest.TestCase):
+    """The gauge and the failure banner are read together, so they must agree.
+
+    A silent death moves none of the risk inputs: the loss does not double, it
+    sits still, and the gradient norm on a dead CIFAR run is about 0.07. The
+    dashboard therefore showed "FAILURE DETECTED — stalled" beside a risk gauge
+    reading LOW / 0.0, and kept showing it for the rest of the run. That is the
+    single most visible self-contradiction the tool could produce.
+    """
+
+    def _monitor(self):
+        import _arc_bootstrap
+
+        m = _arc_bootstrap.OptimizerMonitor.__new__(_arc_bootstrap.OptimizerMonitor)
+        m.best_loss = float("inf")
+        m.opening_losses = []
+        m.steps_without_improvement = 0
+        m.plateau_confirmed = False
+        return m, _arc_bootstrap
+
+    def test_risk_rises_before_the_failure_marker_lands(self):
+        """The gauge should lead the verdict, not trail it."""
+        m, mod = self._monitor()
+        for _ in range(mod.LOSS_PLATEAU_OPENING_SAMPLES):
+            m.check_plateau(2.3026)
+
+        seen = {}
+        for i in range(1, mod.LOSS_PLATEAU_PATIENCE):
+            m.check_plateau(2.3026)
+            seen[i] = mod._risk_score([2.3026] * 5, 0.07, False, m.stall_ratio())
+
+        self.assertEqual(seen[1][1], "LOW", "a brief stall is not yet a concern")
+        self.assertGreater(seen[mod.LOSS_PLATEAU_PATIENCE - 1][0], seen[1][0],
+                           "risk must climb as the stall lengthens")
+        self.assertIn(seen[mod.LOSS_PLATEAU_PATIENCE - 1][1], ("HIGH", "CRITICAL"),
+                      "by the time the verdict is imminent the gauge must not read LOW")
+
+    def test_risk_stays_up_after_the_verdict(self):
+        """Sticky, because the counter resets and a dead run does not recover.
+
+        `check_plateau` zeroes `steps_without_improvement` every time it reaches
+        patience. Without a latch the gauge sawtooths — HIGH, fire, LOW, climb
+        again — which on screen reads as the run having recovered.
+        """
+        m, mod = self._monitor()
+        for _ in range(mod.LOSS_PLATEAU_OPENING_SAMPLES):
+            m.check_plateau(2.3026)
+        for _ in range(mod.LOSS_PLATEAU_PATIENCE):
+            m.check_plateau(2.3026)
+        self.assertTrue(m.plateau_confirmed)
+
+        for _ in range(mod.LOSS_PLATEAU_PATIENCE * 2):
+            m.check_plateau(2.3026)
+            _, label = mod._risk_score([2.3026] * 5, 0.07, False, m.stall_ratio())
+            self.assertIn(label, ("HIGH", "CRITICAL"),
+                          "the gauge must not fall back to LOW while the run is still dead")
+
+    def test_a_converged_run_never_raises_the_gauge(self):
+        """The false positive this would otherwise reintroduce, on the demo's own healthy arm.
+
+        A converged run stalls indefinitely too — that is why the plateau rule
+        needed a progress guard. The gauge reads the same guard, so an 87% run
+        sitting at its best loss forever stays LOW.
+        """
+        m, mod = self._monitor()
+        for _ in range(mod.LOSS_PLATEAU_OPENING_SAMPLES):
+            m.check_plateau(2.30)
+        m.check_plateau(0.62)
+
+        worst = 0.0
+        for _ in range(mod.LOSS_PLATEAU_PATIENCE * 3):
+            m.check_plateau(0.62)
+            worst = max(worst, mod._risk_score([0.62] * 5, 0.5, False, m.stall_ratio())[0])
+        self.assertEqual(worst, 0.0, "a converged run must never raise the risk gauge")
+        self.assertFalse(m.plateau_confirmed)
+
+    def test_a_non_finite_loss_still_outranks_everything(self):
+        import _arc_bootstrap
+        self.assertEqual(_arc_bootstrap._risk_score([1.0], 0.1, True, 0.0), (1.0, "CRITICAL"))
+
+
 class TestPlateauReportsWithoutActing(unittest.TestCase):
     """Detecting the plateau was right. Acting on it destroyed the run.
 

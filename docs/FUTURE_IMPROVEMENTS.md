@@ -408,7 +408,7 @@ Both fixed in `arc-training` (same author, AGPL). A third fix there —
 was a large part of the overhead in 2.2.
 
 ### 2.6 Test the pure functions
-**Effort: 3 h · Impact: medium — Status: done, 123 tests plus CI**
+**Effort: 3 h · Impact: medium — Status: done, 127 tests plus CI**
 
 See [L-6](SECURITY_AUDIT.md).
 
@@ -517,7 +517,7 @@ path to real usage than the VS Code extension.
 | 2.3 | Fix traceback line numbers | 2 h | Med-High | Trust | ✅ Done (`runpy`, zero injected lines) |
 | 2.4 | Bound checkpoint memory | 3 h | Med-High | Trust | ✅ Done (host-resident store, budget reported) |
 | 2.5 | Visible degradation | 2 h | Med-High | Trust | ✅ Done — found 2 real upstream bugs |
-| 2.6 | Tests + CI | 3 h | Medium | Trust | ✅ Done (123 tests, 3 CI jobs incl. secret scan) |
+| 2.6 | Tests + CI | 3 h | Medium | Trust | ✅ Done (127 tests, 3 CI jobs incl. secret scan) |
 | — | **Structural detection reachable at all** *(not in the original plan)* | — | Medium | Trust | ⚠️ Done, then mostly walked back — see below |
 | 3.1 | Hybrid LLM recovery loop | 2 d | High | Later | Open — deliberate, see below |
 | 3.2 | DDP / FSDP support | 1 w | High | Later | Open — deliberate, see below |
@@ -759,7 +759,11 @@ called an unmade design call (`LOSS_PLATEAU_PATIENCE`, `LOSS_PLATEAU_MIN_DELTA`,
 `LOSS_PLATEAU_PROGRESS_RATIO`, `LOSS_PLATEAU_OPENING_SAMPLES`), and it is report-only for
 measured reasons — see *What is actually left*.
 
-What survives of the original complaint is narrower. `_risk_score()` itself is unchanged and
+**Closed.** `_risk_score()` now reads the plateau counter, so the gauge climbs during a stall
+and is already HIGH before the failure marker lands, instead of reading LOW/0.0 beside a
+failure banner. It is gated on the same progress guard as the rule, so a converged run never
+raises it, and latched once confirmed so it cannot sawtooth back to LOW on a run that is still
+dead. Superseded text: `_risk_score()` was unchanged and
 still scores only three things: `is_bad` (NaN/Inf), loss more than doubling over the last 5
 samples, and gradient-norm thresholds. So a flat run now raises a `loss_plateau` verdict and
 says so in the log and the status strip, while the risk gauge beside it can still read
