@@ -406,7 +406,7 @@ Both fixed in `arc-training` (same author, AGPL). A third fix there —
 was a large part of the overhead in 2.2.
 
 ### 2.6 Test the pure functions
-**Effort: 3 h · Impact: medium — Status: done, 93 tests plus CI**
+**Effort: 3 h · Impact: medium — Status: done, 91 tests plus CI**
 
 See [L-6](SECURITY_AUDIT.md).
 
@@ -429,7 +429,7 @@ from `extension.ts` so they could be tested at all.
 starved), loss-trend robustness against mini-batch noise, the fused gradient norm checked
 against the naive per-parameter computation it replaced, AMP unscaled-loss capture, model
 resolution including a two-optimizer GAN, `CheckpointStore` round-trip and RNG determinism, the
-LR guard against a scheduler, plus six end-to-end tests that run the real runner on real
+LR guard against a scheduler, plus nine end-to-end tests that run the real runner on real
 training loops.
 
 **`.github/workflows/ci.yml`** runs all of it on push, and adds a secret-scan job that fails
@@ -507,7 +507,7 @@ path to real usage than the VS Code extension.
 | 2.3 | Fix traceback line numbers | 2 h | Med-High | Trust | ✅ Done (`runpy`, zero injected lines) |
 | 2.4 | Bound checkpoint memory | 3 h | Med-High | Trust | ✅ Done (host-resident store, budget reported) |
 | 2.5 | Visible degradation | 2 h | Med-High | Trust | ✅ Done — found 2 real upstream bugs |
-| 2.6 | Tests + CI | 3 h | Medium | Trust | ✅ Done (45 tests, 3 CI jobs incl. secret scan) |
+| 2.6 | Tests + CI | 3 h | Medium | Trust | ✅ Done (91 tests, 3 CI jobs incl. secret scan) |
 | — | **Structural detection reachable at all** *(not in the original plan)* | — | Medium | Trust | ⚠️ Done, then mostly walked back — see below |
 | 3.1 | Hybrid LLM recovery loop | 2 d | High | Later | Open — deliberate, see below |
 | 3.2 | DDP / FSDP support | 1 w | High | Later | Open — deliberate, see below |
@@ -684,6 +684,35 @@ surfaces. Wiring it to a setting alongside `arcAgent.maxCheckpointMB` is small; 
 default is the actual open question. Note also that the densify-under-risk path
 (`ARC_METRIC_EVERY_DENSE`) was never exercised in those runs — risk stayed `LOW`
 throughout — so its behaviour under sustained elevated risk is untested.
+
+**Nothing in the test suite instantiates the real `arc` collectors.** The structural tests
+feed synthetic `advanced` dictionaries straight into `check_structural()`, which is the right
+way to test the *rules* but means the collector integration path has no coverage at all. The
+consequence showed up the first time the extension was run end to end on a real script: two
+crashing bugs in `arc-training` — `GradientCollector`'s `register_full_backward_hook` failing
+on any `inplace=True` activation, and `WeightCollector` comparing a CPU-cached snapshot against
+a CUDA weight — were caught by neither the 91 tests nor the three CI jobs. Both were invisible
+for structural reasons rather than by accident: `test_harness.py` never builds a model with
+`inplace=True` (only `train_demo.py` does), and CI installs CPU-only torch, so a
+CPU-vs-CUDA device mismatch cannot trigger there under any circumstances. A single end-to-end
+test that builds a model with `inplace=True` activations and runs the real collectors would
+have caught the first; the second needs GPU CI, which is a cost question, not a design one.
+Worth noting alongside this: CI installs `arc-training` from PyPI, so it tests against the
+published package rather than any local fix.
+
+**`docs/experiment_ab.json` does not contain the results the write-up is built on.**
+[`EXPERIMENT_RESULTS.md`](EXPERIMENT_RESULTS.md) cites the file as raw output and shows the
+sweep command as `--lrs 0.03 0.1 0.25 0.5`, but the committed JSON is marked
+`"complete": false` and holds only the `0.03` and `0.1` arms. The document's centrepiece —
+the `lr=0.25` false positive where the entropy rule cut the LR 8× in epoch 1 and drove a run
+that the control arm shows was learning normally down to 10% chance accuracy — is not in it,
+and neither is `lr=0.5`. That result is the strongest honesty argument the project makes, and
+it is the one a reader cannot currently verify from the committed data. Re-running the full
+sweep is roughly 40 minutes of GPU on this hardware; the numbers would not reproduce exactly,
+because the benchmark data was generated on an RTX 3050 with torch 2.6.0 and the current
+machine is an RTX 4060 with torch 2.10.0. Either re-run and re-state, or mark the file
+explicitly as the partial sweep it is — but the current link implies a completeness it does
+not have.
 
 ---
 

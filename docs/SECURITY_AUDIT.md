@@ -859,7 +859,7 @@ Mirrors the `chatPanel` lifecycle, as suggested.
 a prompt from a full 10 000-entry history, which is the case that would have thrown.
 
 ### L-6 — No tests, no CI, no linter
-**Status: fixed. 93 tests across five suites, plus CI.**
+**Status: fixed. 91 tests across five suites, plus CI.**
 - `tests/pure.test.js` (17) — `extractCodeBlock`, `buildScriptGenMessages`,
   `buildSystemPrompt`, `buildReportHtml`, including XSS escaping, the 10 000-entry case, and
   that a missing point breaks the chart line rather than being bridged.
@@ -868,7 +868,7 @@ a prompt from a full 10 000-entry history, which is the case that would have thr
   script and no `Math.random()`, unit-tests the GPU rate table.
 - `tests/ring-buffer.test.js` (8) — ordering across wraps at the real 10 000 capacity.
 - `tests/model-name.test.js` (5) — the formatter that replaced a stale lookup table.
-- `tests/test_harness.py` (48, 6 of them end-to-end on real training loops) — risk heuristic,
+- `tests/test_harness.py` (44, 9 of them end-to-end on real training loops) — risk heuristic,
   JSON finite-guard, structural detector, loss-trend robustness, fused gradient norm against
   the naive computation, AMP unscaled-loss capture, model resolution including the GAN case,
   checkpoint round-trip and RNG determinism, and the LR guard against a scheduler.

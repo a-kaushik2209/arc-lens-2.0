@@ -17,7 +17,7 @@ Do this at least 30 minutes before your slot, not 2 minutes before.
 1. **Install and compile**
    ```bash
    npm install && npm run compile
-   npm test                        # 45 tests, all green
+   npm test                        # 47 tests, all green
    ```
    On Windows, if `npm run compile` reports `'tsc' is not recognized`, `npm install` was run
    from a shell that skipped the `.cmd` shims. Re-run `npm install` from PowerShell or cmd —
@@ -27,7 +27,7 @@ Do this at least 30 minutes before your slot, not 2 minutes before.
 2. **Install the Python side into the interpreter VS Code has selected**
    ```bash
    pip install torch arc-training torchvision
-   python tests/test_harness.py    # 29 tests, ~35s
+   python tests/test_harness.py    # 44 tests, ~21s
    ```
    Both suites green means the harness, the detector, checkpointing and the end-to-end path
    all work on this machine. This is the single best use of five minutes before a demo.
