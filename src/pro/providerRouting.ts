@@ -39,6 +39,14 @@ export function isSupportedKey(key: string): boolean {
   return SUPPORTED_KEY_PREFIXES.some((prefix) => key.startsWith(prefix));
 }
 
+/**
+ * The shipped default for `arcAgent.llmModel`.
+ *
+ * Duplicated from package.json, which cannot be imported here without dragging
+ * the manifest into the bundle. A test asserts the two stay equal.
+ */
+export const SHIPPED_DEFAULT_MODEL = "google/gemini-2.5-flash:free";
+
 /** The prefixes, for the message shown when a key is refused. */
 export const SUPPORTED_KEY_HINT =
   "sk-or-… (OpenRouter), gsk_… (Groq), sk-ant-… (Anthropic), AIzaSy… or AQ.… (Google), or sk-… (OpenAI)";
@@ -83,17 +91,28 @@ export function providerFor(apiKey: string): Provider {
 export function modelForProvider(provider: Provider, configured: string): string {
   if (provider === "openrouter") return configured;
 
+  // Leaving `arcAgent.llmModel` alone is not a choice of a Gemini model.
+  //
+  // Stripping the shipped OpenRouter default to a bare id yielded
+  // "gemini-2.5-flash" and sent it to Google as though the user had asked for
+  // it — a pinned version nobody selected, which Google then began refusing
+  // for new projects with a 404. Treat the untouched default as "no
+  // preference" and use the provider's own current model instead.
+  const chosen = configured !== SHIPPED_DEFAULT_MODEL;
+
   // "vendor/model:tier" -> "model". A bare id is unchanged.
   const bare = configured.split("/").pop()!.split(":")[0];
 
   switch (provider) {
     case "groq":
-      return bare.includes("llama") || bare.includes("mixtral") ? bare : "llama-3.3-70b-versatile";
+      return chosen && (bare.includes("llama") || bare.includes("mixtral")) ? bare : "llama-3.3-70b-versatile";
     case "anthropic":
-      return bare.includes("claude") ? bare : "claude-opus-5";
+      return chosen && bare.includes("claude") ? bare : "claude-opus-5";
     case "gemini":
-      return bare.includes("gemini") ? bare : "gemini-2.5-flash";
+      // A moving alias, deliberately. Every pinned Gemini id this file has
+      // held has eventually been retired underneath it.
+      return chosen && bare.includes("gemini") ? bare : "gemini-flash-latest";
     case "openai":
-      return bare.startsWith("gpt-") ? bare : "gpt-4o-mini";
+      return chosen && bare.startsWith("gpt-") ? bare : "gpt-4o-mini";
   }
 }

@@ -19,7 +19,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("path");
 
-const { providerFor, modelForProvider, isSupportedKey } = require(path.join(__dirname, "..", "out", "pro", "providerRouting.js"));
+const { providerFor, modelForProvider, isSupportedKey, SHIPPED_DEFAULT_MODEL } = require(path.join(__dirname, "..", "out", "pro", "providerRouting.js"));
 
 /** The shipped default for `arcAgent.llmModel` (see package.json). */
 const SHIPPED_DEFAULT = "google/gemini-2.5-flash:free";
@@ -86,8 +86,24 @@ test("no native provider is ever sent OpenRouter formatting", () => {
   }
 });
 
-test("the shipped default reaches Gemini as a usable model id", () => {
-  assert.equal(modelForProvider("gemini", SHIPPED_DEFAULT), "gemini-2.5-flash");
+test("the constant here matches the default package.json actually ships", () => {
+  // If these drift, the "no preference" rule below silently stops firing.
+  const manifest = require(path.join(__dirname, "..", "package.json"));
+  assert.equal(
+    SHIPPED_DEFAULT_MODEL,
+    manifest.contributes.configuration.properties["arcAgent.llmModel"].default
+  );
+});
+
+test("an untouched default is not treated as a choice of Gemini model", () => {
+  // Stripping it to "gemini-2.5-flash" sent Google a pinned version nobody
+  // selected, which it then began refusing with a 404 for new projects.
+  assert.equal(modelForProvider("gemini", SHIPPED_DEFAULT), "gemini-flash-latest");
+});
+
+test("an explicitly configured model still wins over the fallback", () => {
+  assert.equal(modelForProvider("gemini", "gemini-3.6-flash"), "gemini-3.6-flash");
+  assert.equal(modelForProvider("gemini", "google/gemini-3.6-flash:free"), "gemini-3.6-flash");
 });
 
 test("OpenRouter keeps the configured id untouched", () => {
@@ -106,6 +122,6 @@ test("a model meant for another provider falls back rather than being sent on", 
   // api.anthropic.com — the fallback is wrong-but-valid, which is recoverable;
   // a foreign id is a hard API error.
   assert.equal(modelForProvider("anthropic", "google/gemini-2.5-flash:free"), "claude-opus-5");
-  assert.equal(modelForProvider("gemini", "anthropic/claude-opus-5"), "gemini-2.5-flash");
+  assert.equal(modelForProvider("gemini", "anthropic/claude-opus-5"), "gemini-flash-latest");
   assert.equal(modelForProvider("openai", "meta-llama/llama-3.3-70b"), "gpt-4o-mini");
 });
