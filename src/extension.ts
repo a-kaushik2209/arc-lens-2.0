@@ -6,6 +6,7 @@ import { isPro, promptUpgrade, getLLMModel, requireOpenRouterKey, shouldBypassAr
 import { buildSystemPrompt, MetricPoint, AgentLogEntry } from "./pro/contextBuilder";
 import { streamChatCompletion, ChatMessage } from "./pro/chatManager";
 import { buildScriptGenMessages, extractCodeBlock, normalizeNotebook, ScriptGenRequest } from "./pro/scriptGenerator";
+import { ChatSession, StreamSession } from "./pro/streamSession";
 import { buildReportHtml, RunRecord } from "./pro/reportBuilder";
 import { friendlyModelName } from "./pro/modelName";
 import { RingBuffer } from "./pro/ringBuffer";
@@ -16,9 +17,7 @@ import { RingBuffer } from "./pro/ringBuffer";
 let panel: vscode.WebviewPanel | undefined;
 let chatPanel: vscode.WebviewPanel | undefined;
 let generatorPanel: vscode.WebviewPanel | undefined;
-let cancelGeneratorStream: (() => void) | null = null;
-/** See `chatGeneration` — the generator panel has the identical race. */
-let generatorGeneration = 0;
+const generatorStream = new StreamSession();
 let activeProcess: cp.ChildProcess | undefined;
 /** Set by the Stop command so a deliberate SIGTERM is not reported as a crash. */
 let stoppedByUser = false;
@@ -30,21 +29,7 @@ const metricHistory = new RingBuffer<MetricPoint>(10000);
 // prompt without bound until each chat turn was mostly stale log.
 const agentLog = new RingBuffer<AgentLogEntry>(2000);
 let activeTargetFile = "";
-let chatHistory: ChatMessage[] = [];
-let cancelCurrentStream: (() => void) | null = null;
-/**
- * Which chat request owns `cancelCurrentStream` and the next assistant turn.
- *
- * Destroying a request's socket makes it emit `error` on a *later* tick, so a
- * superseded request's callbacks still run after its replacement has started.
- * Without this token the old `onDone` pushed its half-finished reply onto
- * `chatHistory` behind the newer user turn (corrupting the order sent back to
- * the model), nulled `cancelCurrentStream` out from under the live request —
- * leaving it un-cancelable and leaking past panel disposal — and posted a
- * `stream_done` that closed the webview's stream element mid-answer, silently
- * dropping every later chunk.
- */
-let chatGeneration = 0;
+const chat = new ChatSession();
 
 /** Everything needed to render a post-mortem report for the finished run. */
 let currentRun: RunRecord = emptyRun();
@@ -574,7 +559,7 @@ async function launchAgent(
   metricHistory.clear();
   agentLog.clear();
   activeTargetFile = targetFile;
-  chatHistory = [];
+  chat.clear();
   const previousBaseline = currentRun.baselineMetrics;
   currentRun = emptyRun();
   currentRun.file = targetFile;
@@ -929,22 +914,17 @@ function openChatPanel(context: vscode.ExtensionContext) {
     { enableScripts: true, retainContextWhenHidden: true }
   );
 
-  chatPanel.webview.html = getChatHtml(getFriendlyModelName(), chatHistory);
+  chatPanel.webview.html = getChatHtml(getFriendlyModelName(), chat.history);
 
   chatPanel.onDidDispose(() => {
-    cancelCurrentStream?.();
-    // chatHistory outlives the panel, so a turn truncated by closing it would
+    // chat.history outlives the panel, so a turn truncated by closing it would
     // otherwise be replayed to the model as a complete answer on reopen.
-    chatGeneration++;
-    cancelCurrentStream = null;
+    chat.cancel();
     chatPanel = undefined;
   });
 
   chatPanel.webview.onDidReceiveMessage(async (msg) => {
     if (msg.command === "chat") {
-      cancelCurrentStream?.();
-      const gen = ++chatGeneration;
-
       const systemPrompt = buildSystemPrompt(
         metricHistory.toArray(),
         agentLog.toArray(),
@@ -952,46 +932,16 @@ function openChatPanel(context: vscode.ExtensionContext) {
         currentRun.baselineMetrics
       );
 
-      if (chatHistory.length === 0) {
-        chatHistory.push({ role: "system", content: systemPrompt });
-      } else {
-        chatHistory[0] = { role: "system", content: systemPrompt };
-      }
-      chatHistory.push({ role: "user", content: msg.text });
-
-      chatPanel?.webview.postMessage({ type: "stream_start" });
-
-      let assistantReply = "";
-      cancelCurrentStream = streamChatCompletion(
-        chatHistory,
-        (chunk) => {
-          if (gen !== chatGeneration) return;
-          assistantReply += chunk;
-          chatPanel?.webview.postMessage({ type: "stream_chunk", text: chunk });
-        },
-        () => {
-          if (gen !== chatGeneration) return;
-          // An aborted turn can end with nothing streamed. Pushing an empty
-          // assistant message leaves a blank turn in the history the next
-          // request replays back to the model.
-          if (assistantReply) {
-            chatHistory.push({ role: "assistant", content: assistantReply });
-          }
-          chatPanel?.webview.postMessage({ type: "stream_done" });
-          cancelCurrentStream = null;
-        },
-        (err) => {
-          if (gen !== chatGeneration) return;
-          chatPanel?.webview.postMessage({ type: "stream_error", text: err });
-          cancelCurrentStream = null;
-        }
+      chat.send(
+        msg.text,
+        systemPrompt,
+        (h) => streamChatCompletion(chat.messages, h.onChunk, h.onDone, h.onError),
+        (event) => chatPanel?.webview.postMessage(event)
       );
     } else if (msg.command === "clear") {
-      chatHistory = [];
+      chat.clear();
     } else if (msg.command === "cancel") {
-      cancelCurrentStream?.();
-      chatGeneration++;
-      cancelCurrentStream = null;
+      chat.cancel();
       chatPanel?.webview.postMessage({ type: "stream_done" });
     }
   });
@@ -1023,18 +973,13 @@ function openGeneratorPanel(context: vscode.ExtensionContext) {
   // Without this the panel is unreachable after being closed, its in-flight
   // request keeps streaming, and postMessage fires at a disposed webview.
   genPanel.onDidDispose(() => {
-    cancelGeneratorStream?.();
-    cancelGeneratorStream = null;
+    generatorStream.cancel();
     generatorPanel = undefined;
   });
 
   genPanel.webview.onDidReceiveMessage(async (msg) => {
     if (msg.command === "cancel") {
-      cancelGeneratorStream?.();
-      // Bumping the generation is what actually abandons the request: the
-      // destroyed socket still runs its terminal callback a tick later.
-      generatorGeneration++;
-      cancelGeneratorStream = null;
+      generatorStream.cancel();
       genPanel.webview.postMessage({ type: "done" });
       return;
     }
@@ -1045,20 +990,12 @@ function openGeneratorPanel(context: vscode.ExtensionContext) {
 
     genPanel.webview.postMessage({ type: "generating" });
 
-    cancelGeneratorStream?.();
-    // Same generation guard as the chat panel: a destroyed request still fires
-    // its terminal callback a tick later, which otherwise nulled the *new*
-    // stream's cancel handle and ran extract/compile/save-dialog on the
-    // abandoned response.
-    const gen = ++generatorGeneration;
-
     let fullResponse = "";
-    cancelGeneratorStream = streamChatCompletion(
-      messages,
-      (chunk) => { fullResponse += chunk; },
-      async () => {
-        if (gen !== generatorGeneration) return;
-        cancelGeneratorStream = null;
+    generatorStream.start(
+      (h) => streamChatCompletion(messages, h.onChunk, h.onDone, h.onError),
+      {
+      onChunk: (chunk) => { fullResponse += chunk; },
+      onDone: async () => {
         if (!generatorPanel) return; // panel closed mid-stream
         const code = extractCodeBlock(fullResponse, req.outputFormat);
         if (!code) {
@@ -1149,11 +1086,10 @@ function openGeneratorPanel(context: vscode.ExtensionContext) {
         }
         genPanel.webview.postMessage({ type: "done" });
       },
-      (err) => {
-        if (gen !== generatorGeneration) return;
-        cancelGeneratorStream = null;
+      onError: (err) => {
         if (!generatorPanel) return;
         genPanel.webview.postMessage({ type: "error", text: err });
+      },
       }
     );
   });
@@ -1925,10 +1861,8 @@ export function deactivate() {
   // Both streams, not just the chat one. An in-flight generator request used to
   // outlive deactivation, holding an open HTTPS connection with nothing left to
   // deliver its response to.
-  cancelCurrentStream?.();
-  cancelCurrentStream = null;
-  cancelGeneratorStream?.();
-  cancelGeneratorStream = null;
+  chat.cancel();
+  generatorStream.cancel();
 
   chatPanel?.dispose();
   generatorPanel?.dispose();
