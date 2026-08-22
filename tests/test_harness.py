@@ -577,6 +577,42 @@ class TestLossPlateau(unittest.TestCase):
         self.assertEqual(tel["effective_rank"], 25.1)
         json.dumps(snap)  # must stay serialisable
 
+    def test_the_progress_threshold_separates_both_sides(self):
+        """Pins the 0.60 threshold itself, from both directions.
+
+        Every other test here uses values far from the boundary, so the constant
+        could drift a long way — or be read with the comparison inverted — while
+        the suite stayed green. This fixes it in place: a run that improved just
+        past the threshold is convergence and stays silent, one that improved
+        just short of it is a stall and fires.
+
+        Deliberately expressed relative to LOSS_PLATEAU_PROGRESS_RATIO rather
+        than hard-coding 0.59/0.61, so retuning the threshold on new evidence
+        moves this test with it instead of forcing someone to edit a magic
+        number they may not understand.
+        """
+        import _arc_bootstrap as mod
+
+        ratio = mod.LOSS_PLATEAU_PROGRESS_RATIO
+        opening = 1.0
+
+        for best, should_fire in ((opening * (ratio - 0.01), False),
+                                  (opening * (ratio + 0.01), True)):
+            m, _ = self._monitor()
+            for _ in range(mod.LOSS_PLATEAU_OPENING_SAMPLES):
+                m.check_plateau(opening)
+            m.check_plateau(best)
+
+            verdict = None
+            for _ in range(mod.LOSS_PLATEAU_PATIENCE + 5):
+                verdict = m.check_plateau(best) or verdict
+
+            self.assertEqual(
+                verdict is not None, should_fire,
+                f"best/opening = {best / opening:.3f} against a {ratio} threshold: "
+                f"expected {'a plateau' if should_fire else 'silence'}",
+            )
+
     def test_an_absent_loss_is_not_a_plateau(self):
         """NaN reaches here when the loss could not be observed at all.
 
@@ -1158,6 +1194,23 @@ finite = bool(torch.isfinite(model.weight).all())
 print("WEIGHTS_FINITE", finite)
 """
 
+SCRIPT_GRAD_SPIKE = """
+import torch, torch.nn as nn, torch.nn.functional as F
+torch.manual_seed(0)
+model = nn.Sequential(nn.Linear(8,32), nn.ReLU(), nn.Linear(32,2))
+opt = torch.optim.SGD(model.parameters(), lr=1e-4)
+x = torch.randn(16,8); y = torch.randint(0,2,(16,))
+for step in range(40):
+    opt.zero_grad(set_to_none=True)
+    loss = F.cross_entropy(model(x), y)
+    loss.backward()
+    # Gradient norm far above the 50 threshold while the loss stays finite.
+    for p in model.parameters():
+        p.grad = torch.full_like(p, 60.0)
+    opt.step()
+print("LOSS_FINITE", bool(torch.isfinite(loss)))
+"""
+
 SCRIPT_PLATEAU = """
 import torch, torch.nn as nn
 torch.manual_seed(0)
@@ -1267,6 +1320,38 @@ class TestIntegration(unittest.TestCase):
         self.assertTrue(interventions, "a detected failure must produce an intervention")
         self.assertLessEqual(failures[0]["step"], interventions[0]["step"],
                              "the failure must precede its remedy")
+
+    def test_a_gradient_spike_on_a_finite_loss_triggers_nothing(self):
+        """Pins a documented limitation that is easy to break by accident.
+
+        README, ARCHITECTURE and COMPETITIVE_LANDSCAPE all used to list
+        "gradient norm above 50" as a trigger of its own. It is not.
+        `run_recovery_agent` has one call site and `_handle_failure` only reaches
+        it with kind="numerical", so the grad-norm test that latches clipping
+        lives *inside* a path only an already-non-finite or exploded loss can
+        open. A run whose gradients spike while its loss stays finite is
+        measured, charted and risk-scored, and never clipped.
+
+        This test exists because that was asserted in three documents before
+        anyone ran it. Measured here rather than reasoned about: the norm reaches
+        ~1129, twenty-two times the threshold, and nothing fires.
+
+        If someone later gives gradient explosion its own entry point — an open
+        design question in FUTURE_IMPROVEMENTS — this test is the one that should
+        fail, and the docs it guards must change with it.
+        """
+        events, stdout = run_harness(SCRIPT_GRAD_SPIKE)
+        self.assertIn("LOSS_FINITE True", stdout, "the fixture must keep the loss finite")
+
+        norms = [e["grad_norm"] for e in events
+                 if e["type"] == "metric" and e.get("grad_norm") is not None]
+        self.assertGreater(max(norms), 50.0,
+                           "fixture must actually exceed the threshold, or it proves nothing")
+
+        self.assertEqual([e for e in events if e["type"] == "failure_detected"], [],
+                         "a finite loss must not be reported as a failure")
+        self.assertEqual([e for e in events if e["type"] == "intervention"], [],
+                         "gradient explosion alone must not produce an intervention")
 
     def test_a_plateau_is_reported_through_the_real_harness_without_acting(self):
         """End to end: detection reaches the log, nothing reaches the model.

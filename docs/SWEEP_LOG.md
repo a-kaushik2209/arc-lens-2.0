@@ -254,3 +254,30 @@ sweeps, and the rule stayed silent in all of them.
 **What it would measure:** repeatability at `lr=0.5`, several runs of one configuration, to get
 an error bar instead of an implied one. Until that exists, no delta at this learning rate should
 be quoted as an ARC effect in either direction.
+
+---
+
+## Verifications that are not sweeps
+
+Checks run against the code rather than against a training outcome. Recorded here because each
+one substantiates a claim made in a commit message or a document, and a claim whose evidence
+lives only in a scratchpad file is a claim nobody can check later.
+
+Everything in this list that *could* become a test has become one — the point of the table is to
+name the test, so the evidence is executable rather than anecdotal.
+
+| Claim | How it was checked | Result | Pinned by |
+| :--- | :--- | :--- | :--- |
+| Gradient explosion is not an independent trigger | Ran a script holding grad norm at 60 per parameter with a finite loss through `runner.py` | Norm reached **1128.89**, 22× the threshold. Zero failures, zero interventions | `test_a_gradient_spike_on_a_finite_loss_triggers_nothing` |
+| The 0.60 progress threshold separates both ways | Fed `best/opening` just either side of the constant | Below fires, above stays silent | `test_the_progress_threshold_separates_both_sides` |
+| Report-only kinds touch nothing | Drove `_handle_failure` for both kinds and inspected the optimizer afterwards | No intervention, no `zero_grad`, LR unchanged, `detection_silenced` not `unrecoverable` | `TestPlateauReportsWithoutActing` (8 tests) |
+| The risk gauge leads the verdict | Sampled `_risk_score` across a dead run and a converged one | Dead: LOW → MEDIUM at 150 → HIGH at 299, sticky after. Converged: 0.00 across 900 flat steps | `TestRiskGaugeTracksTheStall` (4 tests) |
+| `victim.release()` never ran | Checked the attribute, then exercised eviction | `OptimizerMonitor` has no `release()`; `store.release()` now runs and eviction bounds the dict | *(not pinned — see below)* |
+| The dashboard/harness drift guard works | Reintroduced the drift and re-ran the JS suite | 2 tests fail, as intended | `the dashboard's report-only set matches the harness exactly` |
+| The suite is safe to run concurrently | Ran two full suites simultaneously | 67 passed in both; the same experiment previously produced 2 and 4 phantom failures | *(not pinned — see below)* |
+
+**Two of these are not pinned by a test, and that is a real gap rather than an oversight.**
+Eviction cleanup and concurrency-safety are both properties of the environment a test runs in,
+awkward to assert from inside a single process. They were verified once, by hand, on the dates
+of the commits that introduced them, and nothing would currently catch either regressing. If
+either matters more later, they need a test that spawns processes rather than a note here.
