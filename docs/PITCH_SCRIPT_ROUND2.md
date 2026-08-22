@@ -2,7 +2,7 @@
 
 **Team Heisen-bug (U333WKR8) · Challenge #171: Accessibility — Resource Waste Reduction**
 
-~1,250 words. 7–7.5 minutes. Slide cues in brackets — not spoken.
+~1,350 words. 7.5–8 minutes. Slide cues in brackets — not spoken.
 
 Every number traces to `docs/WASTE_REDUCTION.md`, with the method that produced it.
 
@@ -69,12 +69,31 @@ numbers. Zero code changes to integrate — no import, no callback, no decorator
 
 ---
 
-## 3:00 — It actually preserves the compute
+## 3:00 — What the demo run is
+
+[Demo config]
+
+Twenty seconds on what's actually running, because it matters for how you read the next slide.
+
+Nine-layer CNN, 2.8 million parameters, BatchNorm throughout. Real CIFAR-10 — not synthetic, not
+a subset. SGD with momentum, cosine decay, no gradient clipping.
+
+The one unusual thing is a peak learning rate of 5.0. And that's not as absurd as it looks: it's
+what you get copying a learning rate from a paper that used a different model and a much larger
+batch, and keeping your own warmup. It's a mistake people actually make.
+
+**Nothing is injected.** No NaN bomb, no scripted curve. The failure is just what that learning
+rate does to this network on this data, and ARC has to detect it rather than be told where to
+look.
+
+---
+
+## 3:25 — It actually preserves the compute
 
 [A/B table: 10.00% vs 46.59%]
 
-The A/B, and this is the one that matters. Same seed, same data order, 1,950 steps, the only
-difference is whether interventions are allowed.
+Same seed, same data order, 1,950 steps. The only difference is whether interventions are
+allowed.
 
 The loss goes non-finite at step 6 in both arms — 2.5 times ten to the twelve by the end of the
 first epoch in the control.
@@ -94,7 +113,7 @@ was "restart and hope."
 
 ---
 
-## 4:05 — Legibility is the waste reduction
+## 4:30 — Legibility is the waste reduction
 
 [Resources Conserved panel]
 
@@ -122,7 +141,7 @@ Accessibility and resource waste aren't two deliverables here. They're the same 
 
 ---
 
-## 5:15 — The four states, and the honesty audit
+## 5:40 — The four states, and the honesty audit
 
 [Status strip, then the provenance table]
 
@@ -147,7 +166,7 @@ amount would be the same class of problem.
 
 ---
 
-## 6:10 — How it's built, and against the field
+## 6:35 — How it's built, and against the field
 
 [Test output, then comparison table]
 
@@ -170,7 +189,7 @@ a feature: fast and fully reproducible.
 
 ---
 
-## 7:00 — Close
+## 7:25 — Close
 
 Half of what we built, we deleted or demoted, because our own measurements said it didn't work.
 Every one of those sweeps is in the repo — including the two we killed mid-run and the claims we

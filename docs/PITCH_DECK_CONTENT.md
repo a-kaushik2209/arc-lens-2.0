@@ -150,7 +150,39 @@ Draw it as a loop, not a line.
 
 ---
 
-### Slide 6 — Live Demo
+### Slide 6 — What the demo run actually is
+
+**Headline:** A real model, a real dataset, and a plausible mistake.
+
+Before showing anything, spend twenty seconds on what's running. This is the slide that stops a
+judge wondering whether the failure was staged.
+
+| | |
+|:---|:---|
+| Model | `DemoCNN` — 9-layer CNN, **2,788,042 parameters**, BatchNorm throughout |
+| Data | **Real CIFAR-10.** Not synthetic, not a subset |
+| Optimizer | SGD, momentum 0.9, weight decay 5e-4, cosine decay, **no gradient clipping** |
+| The one unusual thing | **Peak LR 5.0**, warmup 5 steps |
+| Seeded | Yes — reproducible run to run |
+
+**Nothing is injected.** There is no NaN bomb, no scripted curve, no synthesised metric. The
+failure is what a learning rate of 5.0 does to this network on this data, and ARC has to
+*detect* it rather than be told where it is. Whether it fails and at which step depends on data
+order and initialisation.
+
+**And 5.0 is not an absurd number in the way it looks.** It's what you get copying a learning
+rate from a paper that used a different model and a much larger batch, and keeping your own
+warmup. That is a mistake people actually make.
+
+**Why not 0.5** (the previous default, and worth knowing if asked): BatchNorm renormalises every
+block, so at 0.5 the network doesn't explode — it *saturates* into a flat run at chance accuracy.
+ARC detects that as `loss_plateau` and deliberately does not act. Correct behaviour, but the
+rescue path is never exercised and a viewer sees detection without recovery. At 5.0 the loss goes
+non-finite, which is the failure ARC does act on — so both kinds show up in a single run.
+
+---
+
+### Slide 6b — Live Demo
 
 **Headline:** Watch it happen. Nothing is injected.
 
