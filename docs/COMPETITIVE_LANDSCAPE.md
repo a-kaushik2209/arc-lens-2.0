@@ -70,9 +70,10 @@ Two things are true and worth saying plainly:
 2. **The detection is rule-based thresholds, not ML.** `ARC_FUNDING_PROPOSAL.md` cites a "97.5%
    accuracy MLP failure predictor" from the core `arc-training` research; that classifier is
    *not* what ships in ARC Lens's live intervention path per `ARCHITECTURE.md` — the extension
-   trips on `isnan(loss) or isinf(loss) or |loss| > 1e6`, `grad_norm > 50`, and **one**
-   structural rule measured relative to each run's own baseline (effective rank below 50% of
-   baseline, with that baseline captured only after a 200-step warmup). If a judge asks "walk me through your ML-based prediction," the honest answer is
+   trips on `isnan(loss) or isinf(loss) or |loss| > 1e6`, `grad_norm > 50`, and **two**
+   report-only structural rules measured relative to each run's own baseline (effective rank
+   below 50% of baseline, with that baseline captured only after a 200-step warmup; and a
+   loss plateau against the run's own opening loss). If a judge asks "walk me through your ML-based prediction," the honest answer is
    "the shipped detector is deterministic thresholds; the learned classifier is a separate
    research result in the core library, not yet wired into the live product." Decide before the
    pitch whether to mention the MLP result at all — citing it without that caveat is the fastest
@@ -81,8 +82,9 @@ Two things are true and worth saying plainly:
    Note that the live intervention path is now **only** the loss and gradient-norm tests. The
    structural rules detect and report; none of them acts.
 
-   The nuance worth volunteering, because it is the most credible thing here: there used to be
-   three structural rules and there is now one, and both deletions were forced by measurement.
+   The nuance worth volunteering, because it is the most credible thing here: four structural
+   rules have been built, two were deleted outright and the two that remain were stripped of
+   the power to act — every one of those decisions forced by measurement.
    The update-ratio rule's distribution overlapped almost completely between healthy and failing
    runs — the healthy run peaked *higher* and breached *longer* — and acting on it cost 1.74 and
    0.78 accuracy points on A/B runs that needed no help. The gradient-entropy rule was worse: it
@@ -192,7 +194,7 @@ non-threat; the honest pitch framing is "this is a 6-12 month execution window, 
 moat," and the defensibility has to come from being first, from the IDE-native distribution
 (VS Code Marketplace discovery), and from going deeper on PyTorch-specific signals (effective
 rank, gradient entropy) than a framework-agnostic platform is likely to prioritize — with the
-caveat that going deeper is exactly what removed two of our three structural rules, so "deeper
+caveat that going deeper is exactly what removed two of our four structural rules, so "deeper
 signals" is a research direction here, not a shipped advantage.
 
 **"Why not just use gradient clipping / `EarlyStopping(check_finite=True)`?"**

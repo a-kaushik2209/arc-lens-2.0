@@ -352,11 +352,13 @@ Nothing stops them from also using it — but clipping only addresses gradient e
 doesn't recover state. It can't undo a NaN that's already propagated into the weights, and it
 does nothing for representation collapse (falling effective rank with no gradient spike) or
 silent optimizer corruption. ARC's rollback is the piece gradient clipping structurally can't
-do: restoring to a known-good checkpoint rather than just capping the next update. That said,
-our own agent's `enable_grad_clipping` tool is advisory-only today — it recommends a threshold
-but can't insert a `clip_grad_norm_()` call into a loop it doesn't own, so the two approaches
-are complementary, not competing.
-[`ARC_FUNDING_PROPOSAL.md` §1, competitive table; `ARCHITECTURE.md` §6, "advisory because the harness ... cannot insert a clip_grad_norm_ call"]
+do: restoring to a known-good checkpoint rather than just capping the next update. The two are
+complementary rather than competing — and ARC's `enable_grad_clipping` is a real intervention,
+not advice: the harness owns the `Optimizer.step` anchor, so it calls
+`torch.nn.utils.clip_grad_norm_()` itself on every later update without needing to edit the
+training loop.
+[`ARCHITECTURE.md` §6, "Gradient clipping is a real intervention, not advice";
+`_arc_bootstrap.py:1349`]
 
 **Q17. How is this different from just calling `torch.save` periodically yourself?**
 Three things a manual checkpoint script doesn't give you for free: automatic *detection*
@@ -515,7 +517,7 @@ One item cannot be closed from here.
 | Fixed | M-8 | Nonce CSP, all 22 inline handlers converted |
 | Fixed | M-9 | Interpreter resolved via the Python extension |
 | Fixed | M-10 | Dead license code and the hardcoded JWT backdoor deleted |
-| Fixed | L-1…L-11 | Tail flush, batch-timer race, ring buffer, panel leak, reduce, 120 tests + CI |
+| Fixed | L-1…L-11 | Tail flush, batch-timer race, ring buffer, panel leak, reduce, 122 tests + CI |
 | **Owner action** | C-1 | Source side fully clean and CI-guarded; the four *published* `.vsix` files still contain the old secret and need revocation + supersession |
 
 Second review pass, over the code the table above describes as fixed:

@@ -51,7 +51,7 @@ arc-lens/
 ├── media/
 │   ├── dashboard.html            Markup, CSS, ECharts setup, event handling
 │   └── vendor/echarts.min.js     Vendored — the dashboard renders with no network
-└── tests/                        120 tests across six suites
+└── tests/                        122 tests across six suites
 ```
 
 The Python sources ship as files. They were previously base64-encoded into `extension.js`,
@@ -93,7 +93,7 @@ sequenceDiagram
     alt loss non-finite or exploded
         Boot->>Agent: run_recovery_agent(kind="numerical")
     else structural pathology sustained
-        Boot->>Agent: run_recovery_agent(kind="representation_collapse")
+        Boot-->>Ext: {"type":"failure_detected"} — reported, no agent call
     end
 
     Agent->>Boot: restore checkpoint / scale LR / enable clipping
@@ -463,7 +463,7 @@ sits in the *analysis* path — the Failure Analyst panel — where latency is a
 | `get_training_snapshot` | always, first | Builds the state the rules read |
 | `rollback_and_reduce_lr` | non-finite **or** `|loss| > 1e6` | Restore checkpoint, LR × 0.2 |
 | `enable_grad_clipping` | `grad_norm > 50`, once | Clip at 1.0 on every later update |
-| `reduce_learning_rate` | structural trigger | LR × 0.5 |
+| `reduce_learning_rate` | — | LR × 0.5. **Unreachable:** no structural rule reaches the agent any more (see §*Report only*), so nothing triggers this tool. Kept as a cross-file safety net, not as live behaviour |
 
 Two changes from the original design are worth noting.
 
