@@ -1071,6 +1071,19 @@ function pairs(valueArray) {
   return out;
 }
 
+// For series bound to a log axis. log(0) is undefined, so a zero is not a point
+// that can be drawn low — it cannot be drawn at all, and ECharts breaks the
+// series rather than saying so. This is not a rare edge: the demo's cosine
+// schedule computes lr = 0 at step 0 (warmup scale 0/N) and again at the final
+// step (cos(pi) = -1), so every run starts and ends with an unplottable LR, and
+// gradient norm can legitimately reach 0 before the first backward pass.
+// Dropping those points leaves a gap, which is the correct reading: the value
+// is real but has no position on this scale. Same standard as the rest of the
+// dashboard — an absent value reads as absent, never as a fabricated one.
+function logPairs(valueArray) {
+  return pairs(valueArray).filter(([, v]) => v > 0);
+}
+
 function buildOption(name, colors) {
   const common = {
     backgroundColor: 'transparent',
@@ -1105,7 +1118,7 @@ function buildOption(name, colors) {
           data: baselineSeries, color: colors.textTertiary,
           lineStyle: { width: 1.5, type: 'dotted' }
         }] : []),
-        { ...seriesBase, name: 'Learning Rate', yAxisIndex: 1, data: pairs(lrs), color: colors.textTertiary, lineStyle: { width: 1.5, type: 'dashed' } }
+        { ...seriesBase, name: 'Learning Rate', yAxisIndex: 1, data: logPairs(lrs), color: colors.textTertiary, lineStyle: { width: 1.5, type: 'dashed' } }
       ]
     };
   }
@@ -1117,7 +1130,7 @@ function buildOption(name, colors) {
         { type: 'value', position: 'right', axisLine: { show: false }, splitLine: { show: false }, axisLabel: { color: colors.textSecondary, fontSize: 10, formatter: fmtNum } }
       ],
       series: [
-        { ...seriesBase, name: 'Gradient L2 Norm', yAxisIndex: 0, data: pairs(gradNorms), color: seriesColor('orange', colors), markLine: markLineFor(colors), markArea: markAreaFor(colors) },
+        { ...seriesBase, name: 'Gradient L2 Norm', yAxisIndex: 0, data: logPairs(gradNorms), color: seriesColor('orange', colors), markLine: markLineFor(colors), markArea: markAreaFor(colors) },
         { ...seriesBase, name: 'Gradient Entropy', yAxisIndex: 1, data: pairs(gradEntropies), color: seriesColor('aqua', colors) }
       ]
     };

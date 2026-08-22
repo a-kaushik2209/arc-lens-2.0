@@ -117,14 +117,17 @@ function loadHelpers() {
     /const REPORT_ONLY_KINDS = new Set\([^\n]+\);/,
     /function isReportOnly\([^\n]*\}/,
     /const RISK_COLORS = [^\n]+/,
+    /function pairs\([\s\S]*?\n\}/,
+    /function logPairs\([\s\S]*?\n\}/,
   ];
-  let source = "";
+  // `pairs` reads the module-level step index; the tests supply it directly.
+  let source = "let steps = [];\n";
   for (const pattern of wanted) {
     const match = script.match(pattern);
     assert.ok(match, `could not extract ${pattern}`);
     source += match[0] + "\n";
   }
-  source += "\nmodule.exports = { applyGpuRate, escapeText, shortKind, shortAction, isReportOnly, RISK_COLORS, getRate: () => ({ gpuRate, gpuRateSource, gpuWatts }) };";
+  source += "\nmodule.exports = { applyGpuRate, escapeText, shortKind, shortAction, isReportOnly, RISK_COLORS, pairs, logPairs, setSteps: s => { steps = s; }, getRate: () => ({ gpuRate, gpuRateSource, gpuWatts }) };";
   const sandbox = { module: { exports: {} } };
   sandbox.exports = sandbox.module.exports;
   vm.createContext(sandbox);
@@ -228,4 +231,65 @@ test("every risk label the backend can emit has a colour", () => {
   // MEDIUM must not be green: the badge used to be coloured from the score,
   // so a score of 0.45 labelled MEDIUM rendered green.
   assert.notEqual(h.RISK_COLORS.MEDIUM, h.RISK_COLORS.LOW);
+});
+
+test("series on a log axis drop values a log axis cannot place", () => {
+  // log(0) is undefined, so a zero is not a low point — it has no position on
+  // the scale at all, and ECharts breaks the series instead of reporting it.
+  // The demo hits this twice in every single run: the cosine schedule computes
+  // lr = 0 at step 0 (warmup scale 0/N) and again at the final step
+  // (cos(pi) = -1), so an unguarded LR series misrenders at both ends of the
+  // run that gets demonstrated on stage.
+  const h = loadHelpers();
+  h.setSteps([0, 1, 2, 3]);
+  // The helpers are built inside a vm realm, so their arrays do not share a
+  // prototype with this file's. Compare by value.
+  const shape = (v) => JSON.stringify(v);
+
+  assert.equal(shape(h.pairs([0, 0.5, 5, 0])), shape([[0, 0], [1, 0.5], [2, 5], [3, 0]]));
+  assert.equal(shape(h.logPairs([0, 0.5, 5, 0])), shape([[1, 0.5], [2, 5]]));
+
+  // Negative values cannot appear on a log axis either.
+  assert.equal(shape(h.logPairs([-1, 2, 0, 3])), shape([[1, 2], [3, 3]]));
+
+  // A gap must stay a gap: a filtered point is never substituted with a floor
+  // value, which would be a fabricated reading of exactly the kind the
+  // provenance audit removed elsewhere in this file.
+  assert.equal(h.logPairs([0, 0, 0, 0]).length, 0);
+});
+
+test("every log axis is fed by logPairs, not pairs", () => {
+  // A drift guard. Binding a series to a log axis with pairs() reintroduces the
+  // bug silently, because it only surfaces as a broken line at the two ends of
+  // a run.
+  const script = inlineScript();
+  // Split on each "yAxis:" so a chart's slice ends where the next chart's
+  // axis definition begins, instead of an arbitrary character count that can
+  // run past this chart's own series into the next one.
+  const starts = [...script.matchAll(/yAxis: [\[{]/g)].map((m) => m.index);
+  assert.ok(starts.length > 0, "expected to find chart yAxis definitions");
+
+  let logAxesChecked = 0;
+  for (let i = 0; i < starts.length; i++) {
+    const chart = script.slice(starts[i], i + 1 < starts.length ? starts[i + 1] : starts[i] + 2000);
+    const axes = chart.match(/type: '(?:value|log)'/g) || [];
+    axes.forEach((axis, index) => {
+      if (axis.indexOf("log") === -1) return;
+      logAxesChecked++;
+      const marker = "yAxisIndex: " + index + ", data: ";
+      let from = 0;
+      for (;;) {
+        const hit = chart.indexOf(marker, from);
+        if (hit === -1) break;
+        const helper = chart.slice(hit + marker.length).split("(")[0];
+        assert.equal(
+          helper,
+          "logPairs",
+          "a series on log axis " + index + " uses " + helper + "() instead of logPairs()"
+        );
+        from = hit + marker.length;
+      }
+    });
+  }
+  assert.ok(logAxesChecked >= 2, "expected the LR and gradient-norm log axes to be checked");
 });
