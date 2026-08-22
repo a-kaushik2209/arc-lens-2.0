@@ -2,74 +2,125 @@
 
 **Team Heisen-bug (U333WKR8) · Challenge #171: Accessibility — Resource Waste Reduction**
 
-Two parts. Part 1 is said before anything is on screen. Part 2 is not a monologue on a clock —
-it's commentary keyed to what the dashboard actually does, in the order a real run produces it.
-The run is not scripted, so the exact step numbers move a little run to run; the sequence of
-events does not. Do the dry run in `DEMO_SCRIPT.md` §1.4 so you know your numbers before you're
-live.
+This is written to be practiced word for word, for a room that knows nothing about machine
+learning. Every technical term gets explained the first time it's said — you don't need to
+assume anyone in the audience trains models. `[Brackets]` are stage directions, not spoken.
+
+Two parts. **Part 1** is said before you touch the keyboard. **Part 2** is not a monologue on a
+clock — it's what you say as the dashboard actually does things, in the order a real run
+produces them. The run isn't scripted, so exact step numbers shift a little each time; the
+sequence of events doesn't. Do a dry run first (`DEMO_SCRIPT.md` §1.4) so the numbers you say
+out loud are numbers you've actually seen.
 
 Every figure traces to `docs/WASTE_REDUCTION.md`.
 
 ---
 
-## Part 1 — Before opening anything
+## Part 1 — Before you open anything
 
-**Problem.** Training runs fail without crashing. A learning rate slightly too high sends the
-loss to NaN, and the process stays alive, the GPU stays at 100%, the job still says "running" —
-nothing in the stack says it's dead. On our own demo run, ARC knew the run had failed at 15.3
-seconds. The run kept going to 86 seconds. 82% of that run's compute was spent after the answer
-was already known.
+Here's a question for you. Has anyone here ever left something running overnight — a big
+download, a render, anything — and come back the next morning to find it had failed six hours
+in, and you just... didn't know until now?
 
-**Solution.** ARC Lens is a VS Code extension. It hooks a PyTorch training loop with zero code
-changes. When the loss goes non-finite, it rolls the model back to the last healthy checkpoint,
-cuts the learning rate, latches gradient clipping on, and lets the same run continue — no
-restart, no human in the loop. On a seeded A/B, that took a run from 10.00% accuracy, chance, to
-46.59%. For a failure it detects but can't safely fix — a run pinned at chance for four epochs,
-looking completely healthy on any ordinary chart — it says so instead of guessing at a response.
+[Pause. Let it land, whether or not anyone answers.]
 
-**Challenge #171.** The brief asks for the part of the MVP closest to accessibility to cut
-waste, and for success, failure, status and next steps to be visible. Those aren't two
-deliverables here. ARC can't fix the failure above — every response we tried made it worse — so
-what the product produces for it is not a rescue, it's a person told in time. The status strip,
-the live region, the named cause on a failed preflight, the data table behind every chart: for
-that failure, that's the whole feature, and it's what turns 15 seconds of detection into
-something acted on instead of 70 more seconds burned.
+That's the entire premise of what we built, except the thing that fails is more expensive, and
+it fails more quietly.
 
-Opening it now.
+So — quick version of what "training a model" even is, because I want everyone in this room
+with me for the next few minutes, not just the ML people. You've got a program that's trying to
+learn a pattern — say, "what does a cat look like in a photo." It does this by adjusting a huge
+pile of internal numbers, a little bit, thousands of times, based on how wrong its last guess
+was. That "how wrong" number is called the **loss**. Lower loss, better model. Every one of those
+thousands of adjustments is called a **step**. That's the whole loop: guess, measure how wrong,
+nudge the numbers, repeat.
+
+Here's the part nobody tells you when you start: that loop breaks. Constantly. Not with a
+crash — with silence. One of those nudges can be too aggressive, the internal numbers spiral
+into garbage, and the program keeps running, keeps saying "step 4,001... step 4,002..." for the
+next six hours, producing absolutely nothing useful. No error. No red text. It just quietly
+stopped being training.
+
+We measured exactly this on our own demo run, the one I'm about to show you. Our tool knew the
+run was dead at fifteen seconds in. The run itself kept going for another seventy. That's
+**82% of the compute spent after the answer was already known** — and that ratio doesn't care
+how long the run is. Stretch that to a real 48-hour training job and 82% is closing in on two
+full days of GPU time spent training nothing, because nobody was watching closely enough, fast
+enough, to pull the plug.
+
+So — what did we actually build?
+
+ARC Lens is a VS Code extension. You open your training script, you click one button, and it
+watches the run live — no code changes, nothing to import, nothing to configure. The moment the
+loss goes non-finite — programmers call that a **NaN**, "not a number," which is exactly what it
+sounds like, the math has broken — ARC Lens rolls the model back to the last point it was
+healthy, something we call a **checkpoint**, turns down how aggressively it's learning, and lets
+the same run keep going. No restart. Nobody has to be at the keyboard. We tested this pair
+side by side, same starting conditions: the run left alone finished at 10% accuracy, which for
+this dataset is literally a coin flip with ten sides — random guessing. The run ARC caught and
+fixed finished at 46.59%, and was still climbing.
+
+Now — here's the honest part, and it's the part I actually want you to remember. Not every
+failure is one ARC can safely fix. We have a run that goes quietly wrong — never crashes, never
+throws an error, just sits at random-guess accuracy for hours looking completely normal on any
+ordinary chart — and every fix we tried for it made things *worse*, not better. So for that one,
+ARC doesn't guess. It tells you, clearly, immediately, "this is dead, I'm not touching it,"
+instead of pretending it has a solution it doesn't.
+
+Quick show of hands, actually — who here has heard today's challenge is about accessibility and
+reducing waste, and thought those sound like two different problems?
+
+[Pause.]
+
+They're not, in this product. If the tool can't fix a failure, the only thing left that matters
+is whether a human can *see* it fast enough to act — clearly, in plain language, the moment it
+happens. That's accessibility work: a status strip that always says what's happening, screen
+reader support, a table version of every chart. And it turns out that's *also* the waste
+reduction. The faster a person can read "this run is dead," the less compute gets burned after
+they already knew.
+
+Alright — let's go watch it actually happen.
 
 ---
 
-## Part 2 — The demo, as it happens
+## Part 2 — The demo: say this as it happens
+
+[Have the script open, dashboard closed, before you start talking.]
 
 | When this happens on screen | Say this |
 |:---|:---|
-| Script open, before clicking Run | "Ordinary PyTorch loop. `zero_grad`, forward, `cross_entropy`, `backward`, `optimizer.step`. No ARC import, no callback, no wrapper. The only unusual thing is the learning rate — 5.0, which is well past stable for this network. Nothing is injected. ARC has to find this failure, not be told where it is." |
-| Click ▶ Run with ARC Lens | "Zero code changes to get here." |
-| Dashboard opens, panels populate | "Loss, learning rate, gradient norm, GPU memory — live. Resources Conserved panel bottom right, counting from zero." |
-| First few steps tick by | "It hooks `Optimizer.step`, not `backward()`. One recorded step is one weight update — that's what keeps gradient accumulation, mixed precision and multi-optimizer GANs correct instead of just not-crashing." |
-| Loss goes non-finite (around step 6) | "There it is. Loss just went non-finite." |
-| Action log: rollback + reduce_lr + grad clipping | "Read the log: rolled back to the last checkpoint, cut the learning rate, clipping latched on. Same process. I didn't touch anything. That's the only path where ARC is allowed to act — an unambiguous divergence." |
-| Loss climbing back down over subsequent steps | "It's recovering off that rollback now." |
-| Val accuracy ticking up epoch to epoch (10% → 18% → 32% → 46%) | "This is the number that matters. A run I've run before with this exact setup, interventions switched off, sits at 10.00% — chance — for all five epochs, because the loss goes non-finite at this same step and nothing brings it back. This one's climbing past 46 and still rising when the schedule ends." |
-| If a `loss_plateau` fires later in the run | "Different failure, and watch what happens — nothing. No rollback line. That's deliberate: this rule used to cut the learning rate, and in testing that made a recoverable run worse, not better. So it reports the diagnosis and stops. It's the only honest thing to do when you've measured that your fix doesn't help." |
-| Resources Conserved panel, run either running or finished | "Steps not re-run, time not re-spent, compute not re-bought — all measured off this run, not assumed. Every number on this panel is labelled measured, derived or estimated, in the page itself, because we audited it and found four places it was displaying numbers it didn't actually have — including a risk score that rendered as a safe 0.00 when the value was simply missing. Fixed, and there's a test for it now." |
-| Run complete | "That's the whole loop. Detect, act if it's safe to act, say so if it isn't." |
+| Script open, before clicking Run | "This is a completely ordinary training script — nothing special, no ARC code in it anywhere. The one deliberately reckless thing in here is how aggressively it's set to learn — turned up higher than this network can actually handle. That's not a rigged demo. That's the single most common way real training runs die: someone copies a setting from a paper or a tutorial that used a different model, and it's just slightly too aggressive for theirs." |
+| Click ▶ Run with ARC Lens | "One click. That's the entire setup." |
+| Dashboard opens, panels start filling in | "This is everything ARC is watching, live: the loss — remember, that's 'how wrong is it right now' — how aggressively it's learning, how big its corrections are getting, and down here, bottom right, a running tally of exactly what this tool is saving you, ticking up from zero as we go." |
+| First several steps tick by, numbers still sane | "Right now everything's fine. It's just learning. This is the boring part, and boring is what you want — boring means healthy." |
+| Loss goes non-finite — watch for it, usually within the first handful of steps | "There. Right there. See how the loss just went from a normal number to garbage? That's the moment I told you about — the math broke. On literally any other tool, this is where someone finds out six hours from now." |
+| Action log shows the rollback line | "Read this with me: it rolled back to the last point where things were healthy, turned down the learning rate, and turned on a safety limiter for future steps. I have touched nothing. The training loop is still running, right now, on its own." |
+| Loss dropping back down over the next several steps | "And there it is recovering. Same run, same process, no restart." |
+| Accuracy climbing across epochs — you'll see it move roughly 10 → 18 → 32 → 46 percent | "Watch this number specifically — it's the one that actually matters. I ran this exact setup once with the safety net switched off, nothing intervening. That run sat at 10% — random guessing — for the entire time, because it never got the chance to recover. This run is already past 46% and it's still going up when we stop watching." |
+| If a `loss_plateau` warning appears later in the run | "Different situation, and I want you to notice ARC does *nothing* here — no rollback line, nothing. This is that quiet failure I mentioned at the start: it's not crashing, it's just stuck. We tried fixing this automatically, measured what happened, and our fix made it worse. So now it just tells you, honestly, 'I see this, I'm not going to guess at a fix' — and that's not a missing feature, that's the more trustworthy behavior." |
+| Pointing at the Resources Conserved panel, any time it has real numbers | "Every number here — steps that didn't need to be re-run, time not re-spent, compute not re-bought — is measured off this exact run, not estimated after the fact. And I mean that literally: we went back and audited every single number this dashboard shows, and found four places it was quietly showing a number it didn't actually have — including a safety gauge that showed 'safe' when the real answer was 'we don't know.' We fixed every one, and wrote a test so it can't happen again quietly." |
+| Run finishes | "That's the whole thing. Watch, catch it, fix it if fixing it is safe, and if it isn't — say so, out loud, immediately, instead of guessing." |
 
 ---
 
 ## Close
 
-Half of what we built, we deleted or demoted, because our own measurements said it didn't work.
-Two structural rules got deleted for firing on healthy runs — one took a run from 87% down to
-chance. Two more got demoted to report-only after we measured their fix making things worse.
-Every one of those sweeps is in the repo, including the ones we killed mid-run and the causal
-claims we withdrew after they didn't replicate.
+Here's what I actually want you to take away, more than any single number.
 
-What's left is narrow and it's real. For the failure ARC can fix: chance to 46% on the same
-seed. For the failure it can't: told at second 15 instead of second 86, and told it can't fix it.
+About half of what we originally built, we ended up deleting or turning off — not because
+someone else told us to, but because we tested it against a control group and it made things
+*worse*. One rule we built took a perfectly healthy run and dropped it to random guessing, by
+itself. We found that, and we killed it. Every single one of those tests is sitting in this
+repo right now, including the ones where we were wrong first.
 
-Anything that touches someone's training run has to earn that with evidence. Half the time ours
-said no.
+So what's left standing is small, and it's real. For the failure this tool can fix: random
+guessing to 46%, on the exact same starting conditions. For the failure it can't: told at
+fifteen seconds, not seventy, and told honestly that it can't fix it.
+
+If something's going to reach into your training run and change it, it should have to earn that
+right with evidence first. Ours didn't always earn it. That's in here too.
+
+Thank you — happy to take questions.
 
 ---
 
