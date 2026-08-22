@@ -1,0 +1,55 @@
+{
+  "device": "NVIDIA GeForce RTX 3050 6GB Laptop GPU",
+  "torch": "2.6.0+cu124",
+  "steps": 200,
+  "batch": 128,
+  "repeats": 3,
+  "model": "DemoCNN (2.79M params)",
+  "generated": "2026-08-22",
+  "results": [
+    {
+      "config": "bare (no ARC)",
+      "median_seconds": 9.818324,
+      "samples": [
+        9.798158,
+        9.818324,
+        9.855159
+      ],
+      "ms_per_step": 49.091620000000006,
+      "overhead_percent": 0.0
+    },
+    {
+      "config": "ARC core metrics only",
+      "median_seconds": 9.993738,
+      "samples": [
+        9.990125,
+        9.993738,
+        10.018484
+      ],
+      "ms_per_step": 49.96869,
+      "overhead_percent": 1.786598201485301
+    },
+    {
+      "config": "ARC full (advanced every 25)",
+      "median_seconds": 10.640106,
+      "samples": [
+        10.589273,
+        10.640106,
+        10.853363
+      ],
+      "ms_per_step": 53.20052999999999,
+      "overhead_percent": 8.369880643580307
+    },
+    {
+      "config": "ARC full (advanced every step)",
+      "median_seconds": 26.51034,
+      "samples": [
+        25.832731,
+        26.51034,
+        28.759753
+      ],
+      "ms_per_step": 132.55169999999998,
+      "overhead_percent": 170.00881209461002
+    }
+  ]
+}

@@ -1,95 +1,214 @@
 # ARC Lens
 
-ARC Lens is a real-time training visualization dashboard, telemetry collector, and automated recovery extension for PyTorch inside VS Code. Designed as the visualization and interactive control center for the **ARC (Autonomic Recovery Controller)** ecosystem, it automatically monitors, analyzes, and recovers training runs from optimization pathologies (such as NaN loss, exploding gradients, or representational collapse) using a local agent-guided reasoning loop.
+ARC Lens is a real-time training monitor and automated recovery controller for PyTorch, inside
+VS Code. It watches a training run, streams its optimisation telemetry to a dashboard, and when
+the run starts to fail it restores the model to a healthy checkpoint, lowers the learning rate,
+or turns on gradient clipping — without any change to your training code.
 
-## Architecture
+It is the IDE frontend for the **ARC (Autonomic Recovery Controller)** framework, built on the
+[`arc-training`](https://pypi.org/project/arc-training/) package.
 
-The extension uses a decoupled three-tier architecture to monitor and recover training loops with zero user-side code modification:
+**Everything in this repository is the real implementation.** Nothing is simulated: no injected
+failures, no scripted curves, no synthesised metrics. Charts show measurements or they show
+gaps.
 
-1. **VS Code Extension**: Manages the host processes, communication channels, dashboard webviews, and AI failure diagnostics.
-2. **Telemetry Engine**: Runs inside the user's execution context. It utilizes the `arc-training` package to hook into PyTorch execution and stream step telemetry (loss, learning rates, gradient norms, and GPU memory usage) in real time.
-3. **Local Reasoning Loop**: Implements a local offline agent. When step metrics exceed safety thresholds (e.g., NaN loss or exploding gradients), the loop pauses execution and applies recovery tools, such as restoring weights from a previous healthy checkpoint and scaling down learning rates.
+---
 
-## How It Works (Production Workflow)
+## What makes it different
 
-In production environments, the system automates telemetry extraction and recovery through the following workflow:
+Every monitoring tool plots a loss curve. Two things here are not standard:
 
-1. **Environment Setup**:
-   Ensure the Python dependencies are installed in your active virtual environment:
-   ```bash
-   pip install torch arc-training
-   ```
+**It intervenes.** When a run diverges, ARC restores weights from a checkpoint, scales the
+learning rate, and resumes — automatically, mid-run.
 
-2. **Zero-Code Instrumentation**:
-   When you click the **Run with ARC Lens** button in the editor toolbar, the extension runs your PyTorch script via a launcher. This launcher dynamically hooks into the PyTorch training loop to stream step-by-step telemetry (e.g., loss, learning rates, gradient norms) to the extension.
+**It knows when to stop.** After three failed recoveries of the same kind it declares the run
+unrecoverable and says so, instead of rolling back forever — because at that point the useful
+answer is "kill this run", not a fourth rollback.
 
-3. **Dashboard Monitoring**:
-   Metrics are streamed live to the VS Code dashboard webview, rendering interactive plots of core and advanced diagnostics (Representation Rank, Gradient Entropy, etc.).
+**It is measured against a control arm, and the measurements have repeatedly gone against it.**
+Three structural detection rules were built, and two were deleted after an A/B showed each one
+intervening on healthy runs: one cost 1.74 and 0.78 points of validation accuracy, the other
+took a run from 87.4% to chance. Both were removed rather than retuned, because the underlying
+statistics do not separate a healthy run from a failing one on real workloads — see
+[`docs/EXPERIMENT_RESULTS.md`](docs/EXPERIMENT_RESULTS.md).
 
-4. **Autonomic Recovery**:
-   When a step metric crosses safety thresholds, the local reasoning loop intercepts execution:
-   * **State Rollback**: It automatically rolls back model weights to the last known healthy checkpoint stored in GPU memory.
-   * **Parameter Adaptation**: It adjusts learning rate schedules or activates gradient clipping to bypass the pathology.
-   * **Resumed Execution**: Once corrected, training continues smoothly without user intervention.
+What survives is deliberately narrow: divergence that is unambiguous (non-finite or exploded
+loss), gradient explosion, and a representation-collapse rule whose threshold is conservative
+enough that it has never fired in validation. The structural signals are still collected and
+charted — they are informative to a human reading a run — they just no longer get to act on
+their own.
 
-## Telemetry Metrics
+---
 
-ARC Lens tracks a variety of optimization metrics to diagnose training failure modes:
+## How it works
 
-### Core Metrics
-* **Loss**: Tracks optimization objective progression.
-* **Learning Rate**: Intercepts optimizer parameter groups in real time.
-* **Gradient L2 Norm**: Monitors optimization step magnitude to detect potential divergence.
-* **GPU Memory**: Tracks allocated and reserved VRAM to warn of Out-Of-Memory (OOM) conditions.
+Three tiers:
 
-### Advanced Diagnostics
-* **Effective Rank**: Estimates layer representation collapse or dimensional reduction.
-* **Gradient Entropy**: Measures gradient noise distribution to identify flat minima.
-* **Weight Update Ratio**: Compares update step magnitude against weight norms ($||\Delta W|| / ||W||$).
-* **Gradient Flow Ratio**: Computes the gradient ratio between early and deep layers to monitor vanishing gradient trends.
+1. **Extension host** (`src/`) — resolves your interpreter, spawns the run, parses telemetry,
+   drives the dashboard and the LLM features.
+2. **Instrumentation harness** (`python/_arc_bootstrap.py`) — patches PyTorch to measure every
+   weight update, owns a host-resident checkpoint store, and detects failures.
+3. **Recovery agent** (`python/arc_agent.py`) — a deterministic rule engine that chooses and
+   applies the response.
 
-## Automated Interventions
+The measurement anchor is `Optimizer.step`, not `loss.backward()`. That means one recorded step
+is one *weight update*, which is what makes gradient accumulation, AMP and multi-optimizer
+setups (GANs) correct rather than merely non-crashing. Your source is executed unmodified via
+`runpy`, so tracebacks report the line numbers that are actually in your file.
 
-When training anomalies are detected, the local agent can perform targeted recovery operations:
-* `rollback_and_reduce_lr`: Reverts model weights to the last known healthy checkpoint and scales down the learning rate.
-* `reduce_lr`: Adapts learning rates mid-run to stabilize optimization.
-* `enable_grad_clipping`: Recommends gradient clipping thresholds when gradient norms exceed safety limits.
+Full detail in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+---
+
+## Install and run
+
+```bash
+pip install torch arc-training      # in the interpreter you have selected in VS Code
+npm install && npm run compile
+```
+
+Press `F5` to launch the Extension Development Host, open a `.py` training script, and click
+**▶ Run with ARC Lens** in the editor toolbar.
+
+ARC Lens uses the interpreter the Python extension has selected for the file — the venv your
+`torch` and `arc-training` are actually installed in. It works without `arc-training`; you lose
+the structural diagnostics, and it tells you so rather than leaving a blank chart.
+
+### Try it on the reference script
+
+`python/train_demo.py` is a real 9-layer CNN on real CIFAR-10, with a deliberately aggressive
+learning rate. No failure is injected — whether it diverges, and at which step, depends on the
+data order and the initialisation.
+
+```bash
+python python/runner.py python/train_demo.py
+```
+
+---
+
+## Commands
+
+| Command | What it does |
+| :--- | :--- |
+| **▶ Run with ARC Lens** | Monitor and recover the active script |
+| **Run Baseline (interventions off)** | Same run, recovery suppressed — the A/B control arm |
+| **Export Run Report** | Self-contained HTML incident report |
+| **Open AI Failure Analyst** | Chat about the run, with its telemetry attached |
+| **Generate ARC-Tested Script** | Generate a pre-instrumented training script |
+
+---
+
+## Telemetry
+
+**Core** — loss, learning rate, gradient L2 norm, GPU memory.
+
+**Structural** (needs `arc-training`) — effective rank (representation collapse), gradient
+entropy (whether gradients still carry information), weight update ratio (‖ΔW‖/‖W‖), gradient
+flow ratio (early vs late layer gradients; needs ≥4 parameterised layers).
+
+## Interventions
+
+| Action | Trigger |
+| :--- | :--- |
+| `rollback_and_reduce_lr` | Loss non-finite or exploded past 1e6, or a confirmed representation collapse |
+| `enable_grad_clipping` | Gradient norm above 50 — applied by ARC, not just recommended |
+
+**Two rules were removed after measurement, and neither is coming back without new evidence.**
+
+*Weight update ratio* fired above an absolute ceiling. Measured across four learning rates, its
+distribution on a healthy run overlaps a failing one almost completely: the p90 values are
+effectively identical (0.089 healthy vs 0.088 damaged), the peaks barely separate (0.285 vs
+0.322), and the healthy run sustained a *longer* consecutive breach than the damaged one — 31
+samples against 26. It was a proxy for "the learning rate is large", not "training is failing".
+
+*Gradient entropy* fired below 1% of an opening baseline. A healthy run and a dead one settle to
+the same value (~1.45e-05) from around step 70, so no threshold separates them; the upstream
+estimator bins a heavy-tailed distribution linearly and saturates for every run.
+
+The pattern behind both: these signals change by orders of magnitude in a run's opening steps
+simply because the model goes from random to structured, so a rule written against that
+transient fires on healthy training. Structural checks therefore wait 200 steps before capturing
+a baseline, thresholds are relative to that baseline rather than absolute, and every rule must
+hold for several consecutive samples.
+
+---
+
+## Overhead
+
+Measured, not asserted — the same loop run with and without the harness
+(`python python/benchmark_overhead.py`). RTX 3050, 2.79M-parameter CNN, 200 steps × batch 128,
+median of 3:
+
+| Configuration | ms/step | Overhead |
+| :--- | ---: | ---: |
+| bare (no ARC) | 49.09 | — |
+| ARC core metrics only | 49.97 | **1.8%** |
+| ARC full (advanced every 25 steps) | 53.20 | **8.4%** |
+| ARC full (advanced every step) | 132.55 | 170.0% |
+
+The last row is why expensive signals are sampled rather than collected every step.
+
+## Does it actually help?
+
+`ARC_MODE=baseline` runs the identical instrumented code path with every intervention
+suppressed, so a comparison against a normal run isolates the interventions and nothing else.
+Both arms use the same seed and the same data order.
+
+```bash
+python python/experiment_ab.py --lrs 0.03 0.1 0.25 0.5 --epochs 10
+```
+
+Measured results — including the configurations where ARC detects the failure and **cannot**
+save the run — are in [`docs/EXPERIMENT_RESULTS.md`](docs/EXPERIMENT_RESULTS.md).
+
+---
 
 ## Configuration
 
-Configure ARC Lens settings in VS Code (`ctrl+,` / `cmd+,`):
+| Setting | Default | Description |
+| :--- | :--- | :--- |
+| `arcAgent.pythonPath` | `python3` | Overrides the Python extension's interpreter. Machine-scope: a workspace cannot set it |
+| `arcAgent.stepDelay` | `0` | Artificial per-step delay for demos. Non-zero is wasted GPU time |
+| `arcAgent.gpuHourlyRate` | `0` | Your GPU's hourly cost. `0` estimates from the detected device |
+| `arcAgent.openRouterKey` | `""` | API key for the AI features. Provider inferred from the prefix |
+| `arcAgent.llmModel` | `google/gemini-2.5-flash:free` | Model for the AI features |
 
-| Setting | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `arcAgent.pythonPath` | `string` | `"python"` | Path to the Python interpreter (e.g., virtual environment binary). |
-| `arcAgent.stepDelay` | `number` | `0.02` | Pause duration (in seconds) introduced after each step to pace visualization. |
-| `arcAgent.licenseKey` | `string` | `""` | ARC Lens Pro license key. Unlocked by default in evaluation mode. |
-| `arcAgent.openRouterKey` | `string` | `""` | OpenRouter API key (`sk-or-...`) used for AI diagnostics features. |
-| `arcAgent.llmModel` | `string` | `"google/gemini-2.5-flash:free"` | LLM model identifier used for analysis. |
+Harness behaviour is tunable through environment variables (`ARC_ADVANCED_EVERY`,
+`ARC_CHECKPOINT_EVERY`, `ARC_MAX_ATTEMPTS`, …) — see
+[`docs/ARCHITECTURE.md` §9](docs/ARCHITECTURE.md).
 
-## Evaluation (Simulation Mode)
+---
 
-This repository is pre-configured to build and run in a standalone **Simulation Mode** for evaluation and demonstration. In this mode, the extension executes a simulated training loop that showcases real-time chart updates, failure detection, and automatic intervention logs without requiring PyTorch, CUDA, or local machine learning packages.
+## Tests
 
-For real-world usage on actual training scripts, please install the official [ARC Lens VS Code Extension](https://marketplace.visualstudio.com/items?itemName=arclens.arc-lens) (which performs actual PyTorch hook injection and active weight recovery) and refer to the [ARC Framework Documentation](https://pyarc.pages.dev/).
+```bash
+npm test                       # TypeScript + dashboard suites
+python tests/test_harness.py   # harness, detector, checkpointing, end-to-end
+```
 
-To run the local evaluation:
+93 tests — 45 TypeScript/dashboard, 48 Python. The Python suite includes six end-to-end tests
+that run the real harness against real training loops, asserting that gradient accumulation does
+not inflate the step count, that an LR intervention survives a scheduler rewriting the learning
+rate every step, that baseline mode never intervenes, and that tracebacks point at the user's
+own line numbers.
 
-1. **Install Dependencies**:
-   ```bash
-   npm install
-   ```
-2. **Compile the Extension**:
-   ```bash
-   npm run compile
-   ```
-3. **Launch the Extension**:
-   Press `F5` to open the VS Code **Extension Development Host**.
-4. **Run the Demo**:
-   * Open any Python (`.py`) file in the new host window.
-   * Click the **Run with ARC Lens** button in the top-right editor toolbar.
-   * The dashboard will open, simulating a real-time training loop that hits a NaN loss at step 20, runs a diagnostic reasoning loop, executes a weight rollback, and recovers successfully.
+Several of these tests were written before the code they cover and found real bugs doing it —
+including one where an optimizer was matched to a wrapper module rather than the submodule it
+actually updates, which would have rolled back both halves of a GAN.
+
+CI additionally fails the build on any secret-shaped literal in source.
+
+---
+
+## Documentation
+
+* [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — how the pieces fit, and why the hook is where
+  it is
+* [`docs/SECURITY_AUDIT.md`](docs/SECURITY_AUDIT.md) — full audit with remediation status
+* [`docs/FUTURE_IMPROVEMENTS.md`](docs/FUTURE_IMPROVEMENTS.md) — roadmap, and what is
+  deliberately still open
+* [`docs/EXPERIMENT_RESULTS.md`](docs/EXPERIMENT_RESULTS.md) — measured A/B results
 
 ## License
 
-This extension is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
+GNU Affero General Public License v3.0 (AGPL-3.0).

@@ -6,31 +6,57 @@ import { isPro, promptUpgrade, getLLMModel, requireOpenRouterKey, shouldBypassAr
 import { buildSystemPrompt, MetricPoint, AgentLogEntry } from "./pro/contextBuilder";
 import { streamChatCompletion, ChatMessage } from "./pro/chatManager";
 import { buildScriptGenMessages, extractCodeBlock, ScriptGenRequest } from "./pro/scriptGenerator";
-
-// Embedded python base64 constants (filled by build script)
-const BASE64_RUNNER = "PLACEHOLDER_BASE64_RUNNER";
-const BASE64_AGENT = "PLACEHOLDER_BASE64_AGENT";
-const BASE64_DEMO = "PLACEHOLDER_BASE64_DEMO";
+import { buildReportHtml, RunRecord } from "./pro/reportBuilder";
+import { friendlyModelName } from "./pro/modelName";
+import { RingBuffer } from "./pro/ringBuffer";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // State
 // ─────────────────────────────────────────────────────────────────────────────
 let panel: vscode.WebviewPanel | undefined;
 let chatPanel: vscode.WebviewPanel | undefined;
+let generatorPanel: vscode.WebviewPanel | undefined;
+let cancelGeneratorStream: (() => void) | null = null;
 let activeProcess: cp.ChildProcess | undefined;
+/** Set by the Stop command so a deliberate SIGTERM is not reported as a crash. */
+let stoppedByUser = false;
 
-// Pro telemetry accumulation
-const metricHistory: MetricPoint[] = [];
+const metricHistory = new RingBuffer<MetricPoint>(10000);
 const agentLog: AgentLogEntry[] = [];
 let activeTargetFile = "";
 let chatHistory: ChatMessage[] = [];
 let cancelCurrentStream: (() => void) | null = null;
+
+/** Everything needed to render a post-mortem report for the finished run. */
+let currentRun: RunRecord = emptyRun();
+
+function emptyRun(): RunRecord {
+  return {
+    file: "",
+    startedAt: new Date().toISOString(),
+    environment: undefined,
+    events: [],
+    summary: undefined,
+    baselineMetrics: undefined,
+    mode: "active",
+  };
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Activate
 // ─────────────────────────────────────────────────────────────────────────────
 export function activate(context: vscode.ExtensionContext) {
   console.log("=== ARC LENS PRO ACTIVATED ===");
+
+  // Invalidate the resolved-interpreter cache the instant the setting actually changes.
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration("arcAgent.pythonPath")) {
+        invalidatePythonPathCache();
+      }
+    })
+  );
+
   // Register "Run with ARC Lens" command
   context.subscriptions.push(
     vscode.commands.registerCommand("arc-lens.run", () => {
@@ -53,8 +79,12 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand("arc-lens.stop", () => {
       if (activeProcess) {
+        // `activeProcess` stays set so the close handler still recognises this
+        // as the current run and drains the buffered tail. The flag is what
+        // stops it reporting the SIGTERM exit code as a training failure — a
+        // deliberate stop used to end in a red ERROR banner.
+        stoppedByUser = true;
         activeProcess.kill("SIGTERM");
-        activeProcess = undefined;
         sendToPanel({ type: "status", status: "stopped", message: "Training stopped by user." });
       }
     })
@@ -83,17 +113,177 @@ export function activate(context: vscode.ExtensionContext) {
       openGeneratorPanel(context);
     })
   );
+
+  // Register "Run Baseline (no interventions)" — the A/B control arm.
+  context.subscriptions.push(
+    vscode.commands.registerCommand("arc-lens.runBaseline", () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor || !editor.document.fileName.endsWith(".py")) {
+        vscode.window.showErrorMessage("ARC Lens: Open a Python (.py) training script first.");
+        return;
+      }
+      editor.document.save().then(() => {
+        launchAgent(editor.document.fileName, context, { mode: "baseline" });
+      });
+    })
+  );
+
+  // Register "Export Run Report"
+  context.subscriptions.push(
+    vscode.commands.registerCommand("arc-lens.exportReport", () => exportReport())
+  );
+}
+
+async function exportReport(): Promise<void> {
+  const metrics = metricHistory.toArray();
+  if (metrics.length === 0 && currentRun.events.length === 0) {
+    vscode.window.showWarningMessage("ARC Lens: no run recorded yet — run a training script first.");
+    return;
+  }
+
+  const html = buildReportHtml(currentRun, metrics as any);
+  const base = path.basename(currentRun.file || "run", ".py");
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const defaultName = `arc-report-${base}-${stamp}.html`;
+
+  const folders = vscode.workspace.workspaceFolders;
+  const defaultUri = folders?.length
+    ? vscode.Uri.joinPath(folders[0].uri, defaultName)
+    : vscode.Uri.file(path.join(require("os").homedir(), defaultName));
+
+  const uri = await vscode.window.showSaveDialog({
+    defaultUri,
+    filters: { "HTML report": ["html"] },
+  });
+  if (!uri) return;
+
+  await vscode.workspace.fs.writeFile(uri, Buffer.from(html, "utf8"));
+  const open = await vscode.window.showInformationMessage(
+    `ARC Lens: report saved to ${path.basename(uri.fsPath)}.`,
+    "Open"
+  );
+  if (open === "Open") {
+    vscode.env.openExternal(uri);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Launch Agent
 // ─────────────────────────────────────────────────────────────────────────────
+/**
+ * Tries the configured interpreter first, then the other common names, so the
+ * extension works whether the platform only provides `python3` (most Linux,
+ * modern macOS) or only `python`/`py` (the standard Windows installer). Falls
+ * back to the configured value untouched if nothing on PATH responds, so
+ * downstream error messages still reference what the user actually asked for.
+ *
+ * Cached per configured value: this spawns up to 4 synchronous child
+ * processes, which would otherwise block the extension host on every single
+ * "Run with ARC Lens" click. Invalidated by the onDidChangeConfiguration
+ * listener registered in activate() the instant arcAgent.pythonPath actually
+ * changes — no guessed TTL, no staleness window.
+ */
+let _resolvedPythonPathCache: { configured: string; resolved: string } | null = null;
+let _pythonPathSubstitutionWarned = false;
+function invalidatePythonPathCache(): void {
+  _resolvedPythonPathCache = null;
+  _pythonPathSubstitutionWarned = false;
+}
+
+/**
+ * Ask the official Python extension which interpreter this file should use.
+ *
+ * This is the interpreter the user already selected for the workspace — the
+ * venv their `torch` and `arc-training` are actually installed into. Guessing a
+ * bare name off PATH finds the system Python instead, which is usually the one
+ * environment where the dependencies are missing.
+ *
+ * Returns undefined when the Python extension is absent or exposes no
+ * selection, in which case the caller falls back to name resolution.
+ */
+async function resolveFromPythonExtension(target: vscode.Uri): Promise<string | undefined> {
+  try {
+    const ext = vscode.extensions.getExtension("ms-python.python");
+    if (!ext) return undefined;
+    const api = ext.isActive ? ext.exports : await ext.activate();
+
+    // Current API surface.
+    const envApi = api?.environments;
+    if (envApi?.getActiveEnvironmentPath) {
+      const envPath = envApi.getActiveEnvironmentPath(target);
+      const resolved = await envApi.resolveEnvironment?.(envPath);
+      const executable = resolved?.executable?.uri?.fsPath ?? resolved?.path ?? envPath?.path;
+      if (typeof executable === "string" && executable.length > 0) return executable;
+    }
+
+    // Legacy API, still present in older Python extension builds.
+    const legacy = api?.settings?.getExecutionDetails?.(target)?.execCommand;
+    if (Array.isArray(legacy) && typeof legacy[0] === "string" && legacy[0].length > 0) {
+      return legacy[0];
+    }
+  } catch {
+    // A failure here is never fatal — fall back to name resolution.
+  }
+  return undefined;
+}
+
+function resolvePythonPath(configured: string): string {
+  if (_resolvedPythonPathCache && _resolvedPythonPathCache.configured === configured) {
+    return _resolvedPythonPathCache.resolved;
+  }
+  const candidates = Array.from(new Set([configured, "python3", "python", "py"]));
+  for (const candidate of candidates) {
+    try {
+      cp.execFileSync(candidate, ["--version"], { stdio: "ignore" });
+      _resolvedPythonPathCache = { configured, resolved: candidate };
+      if (candidate !== configured && !_pythonPathSubstitutionWarned) {
+        _pythonPathSubstitutionWarned = true;
+        vscode.window.showWarningMessage(
+          `ARC Lens: configured Python interpreter "${configured}" wasn't found. Using "${candidate}" instead.`
+        );
+      }
+      return candidate;
+    } catch {
+      continue;
+    }
+  }
+  return configured;
+}
+
+/**
+ * The interpreter to run, preferring the user's selected environment.
+ *
+ * Order: an explicitly configured `arcAgent.pythonPath` wins (the user said so),
+ * then the Python extension's selection, then PATH name resolution.
+ */
+async function resolveInterpreter(targetFile: string): Promise<string> {
+  const inspected = vscode.workspace.getConfiguration("arcAgent").inspect<string>("pythonPath");
+  const configured = (
+    inspected?.globalValue ??
+    inspected?.workspaceValue ??
+    inspected?.workspaceFolderValue ??
+    ""
+  ).trim();
+
+  // "Did the user set this?" is answered by `inspect()`, not by comparing
+  // against the default string. Comparing meant a user who deliberately set
+  // `pythonPath` to "python3" was treated as not having configured anything,
+  // and the Python extension's selection silently overrode their explicit
+  // choice — the one case where they had actually said what they wanted.
+  if (configured) return resolvePythonPath(configured);
+
+  const fromExtension = await resolveFromPythonExtension(vscode.Uri.file(targetFile));
+  if (fromExtension) return fromExtension;
+
+  return resolvePythonPath("python3");
+}
+
 function ensureArcTrainingInstalled(pythonPath: string): Promise<boolean> {
   if (shouldBypassArcCheck()) {
     return Promise.resolve(true);
   }
   return new Promise((resolve) => {
-    cp.exec(`"${pythonPath}" -c "import arc"`, (err) => {
+    cp.execFile(pythonPath, ["-c", "import arc"], (err) => {
       if (!err) {
         resolve(true);
         return;
@@ -101,33 +291,46 @@ function ensureArcTrainingInstalled(pythonPath: string): Promise<boolean> {
 
       vscode.window
         .showWarningMessage(
-          "The Python package 'arc-training' is not installed in the selected environment. Please run the installation command in your active terminal environment.",
-          "Copy Command",
-          "Run in Monitor-Only Mode"
+          "ARC Lens: 'arc-training' is not installed in the selected interpreter. " +
+            "Loss, gradient norm, learning rate, checkpointing and rollback all still work — " +
+            "the structural diagnostics (effective rank, gradient entropy, update ratio) do not.",
+          "Continue Without It",
+          "Copy Install Command"
         )
         .then((selection) => {
-          if (selection === "Copy Command") {
+          if (selection === "Copy Install Command") {
             const cmd = `"${pythonPath}" -m pip install arc-training`;
-            vscode.env.clipboard.writeText(cmd).then(() => {
-              vscode.window.showInformationMessage(
-                "Installation command copied to clipboard! Paste and run it in your active terminal."
-              );
-            });
+            vscode.env.clipboard.writeText(cmd).then(
+              () => {
+                vscode.window.showInformationMessage(
+                  "Installation command copied to clipboard! Paste and run it in your active terminal."
+                );
+              },
+              () => {
+                vscode.window.showErrorMessage(
+                  `Could not access the clipboard. Run this command manually: ${cmd}`
+                );
+              }
+            );
             resolve(false);
-          } else if (selection === "Run in Monitor-Only Mode") {
-            resolve(true);
           } else {
-            resolve(false);
+            // Dismissing proceeds. The missing package degrades the run, it does
+            // not invalidate it, and the degraded state is reported in the
+            // dashboard header either way.
+            resolve(true);
           }
         });
     });
   });
 }
 
-async function launchAgent(targetFile: string, context: vscode.ExtensionContext) {
-  // Resolve config first
+async function launchAgent(
+  targetFile: string,
+  context: vscode.ExtensionContext,
+  options: { mode?: "active" | "baseline" } = {}
+) {
   const config = vscode.workspace.getConfiguration("arcAgent");
-  const pythonPath: string = config.get("pythonPath") || "python";
+  const pythonPath = await resolveInterpreter(targetFile);
 
   // Check and install arc-training if missing
   const shouldProceed = await ensureArcTrainingInstalled(pythonPath);
@@ -175,24 +378,33 @@ async function launchAgent(targetFile: string, context: vscode.ExtensionContext)
 
     // Handle messages FROM the webview (e.g., user clicks Stop inside the panel)
     panel.webview.onDidReceiveMessage(async (msg) => {
-      if (msg.command === "stop") {
+      if (msg.command === "ready") {
+        // The webview's script has attached its message listener; anything
+        // queued while it was loading can be delivered now.
+        releasePendingMessages();
+      } else if (msg.command === "stop") {
         vscode.commands.executeCommand("arc-lens.stop");
       } else if (msg.command === "upgrade") {
-        // Dev key: signed with arc-lens-pro-secret-2024, expires 2029
-        const devKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJkZXYtdXNlckBhcmMtbGVucy5kZXYiLCJ0aWVyIjoicHJvIiwiaWF0IjoxNzgxNDI3ODE2LCJleHAiOjE4NzYwMzU4MTZ9.noY0WxfaEidelugDG6wC00PFw4rXETvYiIaDXKBdAoU";
-        await vscode.workspace.getConfiguration("arcAgent").update("licenseKey", devKey, vscode.ConfigurationTarget.Global);
-        vscode.window.showInformationMessage("🎉 ARC Lens Pro activated! Set your OpenRouter API key to use AI features.", "Open Settings").then(sel => {
-          if (sel === "Open Settings") {
-            vscode.commands.executeCommand("workbench.action.openSettings", "arcAgent.openRouterKey");
-          }
-        });
-        if (panel) {
-          panel.webview.html = getDashboardHtml(context, panel.webview);
-        }
+        // No license is written here. Writing a hardcoded signed token into the
+        // user's global settings to "unlock" a gate that isPro() already leaves
+        // open was a backdoor pretending to be a purchase flow. All features are
+        // available; the AI ones need the user's own API key and nothing else.
+        vscode.window
+          .showInformationMessage(
+            "ARC Lens: all features are unlocked for evaluation. The AI features need your own OpenRouter/Anthropic/OpenAI API key.",
+            "Open Settings"
+          )
+          .then((sel) => {
+            if (sel === "Open Settings") {
+              vscode.commands.executeCommand("workbench.action.openSettings", "arcAgent.openRouterKey");
+            }
+          });
       } else if (msg.command === "openChat") {
         vscode.commands.executeCommand("arc-lens.openChat");
       } else if (msg.command === "openGenerator") {
         vscode.commands.executeCommand("arc-lens.generateScript");
+      } else if (msg.command === "exportReport") {
+        vscode.commands.executeCommand("arc-lens.exportReport");
       } else if (msg.command === "download") {
         try {
           if (!msg.dataUrl || !msg.dataUrl.includes(',')) {
@@ -228,44 +440,57 @@ async function launchAgent(targetFile: string, context: vscode.ExtensionContext)
     panel.webview.html = getDashboardHtml(context, panel.webview);
   }
 
+  const mode = options.mode ?? "active";
+  stoppedByUser = false;
+
   // Reset Pro telemetry on new run
-  metricHistory.length = 0;
+  metricHistory.clear();
   agentLog.length = 0;
   activeTargetFile = targetFile;
   chatHistory = [];
+  const previousBaseline = currentRun.baselineMetrics;
+  currentRun = emptyRun();
+  currentRun.file = targetFile;
+  currentRun.mode = mode;
+  // Keep a baseline arm from an earlier run so the active arm can be drawn
+  // against it. Comparing the two is the whole point of baseline mode.
+  currentRun.baselineMetrics = mode === "baseline" ? undefined : previousBaseline;
 
-  // Tell the panel we are starting a new run (delay to allow webview to load)
-  setTimeout(() => {
-    sendToPanel({
-      type: "start",
-      file: path.basename(targetFile),
-      timestamp: new Date().toISOString(),
-      isPro: isPro(),
-    });
-  }, 500);
+  // Wait for the webview to say it is listening, rather than guessing.
+  //
+  // This was a 500 ms timer. Messages posted before the webview's script has
+  // registered its listener are dropped outright, and on a cold panel load —
+  // or when the HTML is re-set for a second run — 500 ms is not reliably
+  // enough. The dashboard would then never reset: stale file name, stale
+  // charts, status stuck on the previous run. In the other direction, any
+  // event that arrived *before* the timer fired was wiped by the `start`
+  // handler clearing the series.
+  //
+  // The webview posts `ready` as the last thing its script does. Everything
+  // else queues until then, so nothing is dropped and nothing is wiped.
+  const startMessage = {
+    type: "start",
+    file: path.basename(targetFile),
+    timestamp: new Date().toISOString(),
+    isPro: isPro(),
+    mode,
+    baseline: currentRun.baselineMetrics,
+  };
+  panelReady = false;
+  pendingUntilReady = [];
+  sendToPanel(startMessage);
+  // Belt and braces: if a panel is already open and loaded it will not send a
+  // fresh `ready`, so release the queue shortly regardless.
+  setTimeout(() => releasePendingMessages(), 800);
 
-  // ── Resolve config ─────────────────────────────────────────────────────────
-  // Re-use config and pythonPath defined at start of launchAgent
-  const stepDelay: number = config.get("stepDelay") ?? 0.02;
+  const stepDelay: number = config.get("stepDelay") ?? 0;
+  const runnerScript = path.join(context.extensionPath, "python", "runner.py");
 
-  // Ensure python folder in globalStorage exists and write the scripts
-  const pythonDir = path.join(context.globalStorageUri.fsPath, "python");
-  if (!fs.existsSync(pythonDir)) {
-    fs.mkdirSync(pythonDir, { recursive: true });
-  }
-
-  const runnerScript = path.join(pythonDir, "runner.py");
-  const agentScript = path.join(pythonDir, "arc_agent_llm.py");
-  const demoScript = path.join(pythonDir, "train_demo.py");
-
-  fs.writeFileSync(runnerScript, Buffer.from(BASE64_RUNNER, "base64").toString("utf8"), "utf8");
-  fs.writeFileSync(agentScript, Buffer.from(BASE64_AGENT, "base64").toString("utf8"), "utf8");
-  fs.writeFileSync(demoScript, Buffer.from(BASE64_DEMO, "base64").toString("utf8"), "utf8");
-
-  const env = {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
     PYTHONUNBUFFERED: "1",
     ARC_STEP_DELAY: stepDelay.toString(),
+    ARC_MODE: mode,
   };
 
   // ── Spawn the Python backend ───────────────────────────────────────────────
@@ -273,66 +498,172 @@ async function launchAgent(targetFile: string, context: vscode.ExtensionContext)
     env,
     cwd: path.dirname(targetFile),
   });
+  const runProcess = activeProcess;
+
+  // An unhandled 'error' on a ChildProcess is re-thrown as an uncaught exception
+  // in the extension host. `resolvePythonPath` returns the configured value
+  // untouched when nothing on PATH answers, so a stale venv path in settings
+  // reaches spawn() and fails here — the user would see VS Code throw rather
+  // than a message telling them which interpreter could not be started.
+  runProcess.on("error", (err: NodeJS.ErrnoException) => {
+    if (activeProcess === runProcess) activeProcess = undefined;
+    const hint =
+      err.code === "ENOENT"
+        ? `Could not start the Python interpreter "${pythonPath}". Check arcAgent.pythonPath, or select an interpreter with the Python extension.`
+        : `Failed to start the Python interpreter "${pythonPath}": ${err.message}`;
+    vscode.window.showErrorMessage(`ARC Lens: ${hint}`);
+    sendToPanel({ type: "error", message: hint });
+    sendToPanel({ type: "status", status: "error", message: hint });
+  });
 
   let stdoutBuffer = "";
   let messageBatch: any[] = [];
   let batchTimer: NodeJS.Timeout | null = null;
 
   const flushBatch = () => {
+    if (batchTimer) {
+      clearTimeout(batchTimer);
+      batchTimer = null;
+    }
     if (messageBatch.length > 0) {
       sendToPanel({ type: "batch", events: messageBatch });
       messageBatch = [];
     }
-    batchTimer = null;
   };
 
-  activeProcess.stdout?.on("data", (chunk: Buffer) => {
-    stdoutBuffer += chunk.toString();
-    const lines = stdoutBuffer.split("\n");
-    stdoutBuffer = lines.pop() || ""; // keep incomplete line in buffer
+  const ingest = (raw: string) => {
+    const trimmed = raw.trim();
+    if (!trimmed) return;
 
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) { continue; }
-
-      try {
-        const parsed = JSON.parse(trimmed);
-        // Accumulate Pro telemetry
-        if (parsed.type === "metric") {
-          metricHistory.push(parsed as MetricPoint);
-          if (metricHistory.length > 10000) metricHistory.shift();
-        } else if (parsed.type === "failure_detected" || parsed.type === "intervention" || parsed.type === "thought") {
-          agentLog.push({
-            type: parsed.type,
-            step: parsed.step ?? metricHistory.length,
-            message: parsed.message ?? "",
-            action: parsed.action,
-            detail: parsed.detail,
-          } as AgentLogEntry);
+    let parsed: any;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      // A telemetry event can arrive with the user's own output glued to the
+      // front of it. `print(".", end="", flush=True)` — progress dots, hand-
+      // rolled bars — leaves a fragment with no newline in the pipe, so the
+      // next emit reads as `.{"type":"metric",...}`. Parsing the whole line
+      // strictly meant that metric was demoted to a log string and lost from
+      // the history, the report and the chart.
+      //
+      // ARC's own events are always a single JSON object on one line, so the
+      // first `{` is a safe split point: text before it is the user's, and the
+      // remainder is retried as an event.
+      const brace = trimmed.indexOf("{");
+      if (brace > 0) {
+        const prefix = trimmed.slice(0, brace).trim();
+        try {
+          parsed = JSON.parse(trimmed.slice(brace));
+          if (prefix) messageBatch.push({ type: "log", message: prefix });
+        } catch {
+          messageBatch.push({ type: "log", message: trimmed });
+          return;
         }
-        messageBatch.push(parsed);
-      } catch {
+      } else {
         messageBatch.push({ type: "log", message: trimmed });
+        return;
       }
     }
 
+    if (parsed === null || typeof parsed !== "object" || typeof parsed.type !== "string") {
+      // Valid JSON that is not one of our events — a user printing a dict, say.
+      messageBatch.push({ type: "log", message: trimmed });
+      return;
+    }
+
+    if (parsed.type === "metric") {
+      metricHistory.push(parsed as MetricPoint);
+    } else if (
+      parsed.type === "failure_detected" ||
+      parsed.type === "intervention" ||
+      parsed.type === "thought"
+    ) {
+      agentLog.push({
+        type: parsed.type,
+        step: parsed.step ?? metricHistory.length,
+        message: parsed.message ?? parsed.reason ?? "",
+        action: parsed.action,
+        detail: parsed.detail,
+      } as AgentLogEntry);
+    } else if (parsed.type === "environment") {
+      // The dashboard prices preserved compute from the detected GPU; the user's
+      // own configured rate always wins over the built-in estimate.
+      parsed.gpuHourlyRate = config.get<number>("gpuHourlyRate") ?? 0;
+      currentRun.environment = parsed;
+    } else if (parsed.type === "run_summary") {
+      currentRun.summary = parsed;
+    }
+
+    if (parsed.type !== "metric" && parsed.type !== "risk") {
+      currentRun.events.push(parsed);
+    }
+    messageBatch.push(parsed);
+  };
+
+  runProcess.stdout?.on("data", (chunk: Buffer) => {
+    stdoutBuffer += chunk.toString();
+    const lines = stdoutBuffer.split("\n");
+    stdoutBuffer = lines.pop() || ""; // keep incomplete line in buffer
+    for (const line of lines) ingest(line);
     if (!batchTimer) {
       batchTimer = setTimeout(flushBatch, 100);
     }
   });
 
-  activeProcess.stderr?.on("data", (chunk: Buffer) => {
+  runProcess.stderr?.on("data", (chunk: Buffer) => {
     const text = chunk.toString().trim();
     if (text) {
       sendToPanel({ type: "error", message: text });
     }
   });
 
-  activeProcess.on("close", (code) => {
+  runProcess.on("close", (code) => {
+    // A superseded run must not narrate over the run that replaced it.
+    //
+    // `launchAgent` kills any previous process, but the dead one's close handler
+    // still fires afterwards — against the *new* run's globals. It reported
+    // `exitCode: null`, flipping the freshly-started run to ERROR, and if the
+    // killed run was a baseline it overwrote `baselineMetrics` with the new
+    // run's points, so the A/B overlay compared the active run against itself.
+    // The same path made every user-initiated Stop end in a red ERROR banner.
+    if (activeProcess !== runProcess) {
+      return;
+    }
     activeProcess = undefined;
+
+    // A final write with no trailing newline stays parked in stdoutBuffer.
+    // That last line is very often the one that matters — the run summary or
+    // the completion status — so it has to be drained before `done` is sent.
+    if (stdoutBuffer.trim()) {
+      ingest(stdoutBuffer);
+      stdoutBuffer = "";
+    }
+    // Flush synchronously rather than letting a timer fire after `done`, which
+    // is how the dashboard used to show COMPLETED and then keep appending
+    // metrics behind it.
+    flushBatch();
+
+    if (stoppedByUser) {
+      sendToPanel({
+        type: "done",
+        exitCode: 0,
+        mode,
+        message: "Training stopped by user.",
+      });
+      return;
+    }
+
+    if (mode === "baseline") {
+      currentRun.baselineMetrics = {
+        label: `baseline (${path.basename(targetFile)})`,
+        points: metricHistory.toArray().map((m) => ({ step: m.step, loss: m.loss })),
+      };
+    }
+
     sendToPanel({
       type: "done",
       exitCode: code,
+      mode,
       message: code === 0 ? "Training completed successfully." : `Process exited with code ${code}.`,
     });
   });
@@ -341,8 +672,42 @@ async function launchAgent(targetFile: string, context: vscode.ExtensionContext)
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
+/**
+ * Whether the dashboard webview has reported that its listener is attached.
+ *
+ * Anything posted before that is silently discarded by the webview, so events
+ * queue here instead of being lost.
+ */
+let panelReady = false;
+let pendingUntilReady: Record<string, unknown>[] = [];
+
 function sendToPanel(event: Record<string, unknown>) {
-  panel?.webview.postMessage(event);
+  if (!panel) return;
+  if (!panelReady) {
+    pendingUntilReady.push(event);
+    return;
+  }
+  panel.webview.postMessage(event);
+}
+
+function releasePendingMessages() {
+  if (panelReady) return;
+  panelReady = true;
+  const queued = pendingUntilReady;
+  pendingUntilReady = [];
+  for (const event of queued) panel?.webview.postMessage(event);
+}
+
+/**
+ * Per-load nonce for the webview CSP.
+ *
+ * `script-src 'unsafe-inline'` disables exactly the protection the header
+ * exists to provide, which matters most in the chat panel where model output is
+ * rendered into the DOM. A nonce restores it: only the script tags this file
+ * stamped can run, so an injected `<script>` from any source cannot.
+ */
+function makeNonce(): string {
+  return require("crypto").randomBytes(16).toString("base64");
 }
 
 function getDashboardHtml(
@@ -360,8 +725,15 @@ function getDashboardHtml(
     const logoUri = webview.asWebviewUri(
       vscode.Uri.file(path.join(context.extensionPath, "media", "logo.png"))
     );
+    const echartsUri = webview.asWebviewUri(
+      vscode.Uri.file(path.join(context.extensionPath, "media", "vendor", "echarts.min.js"))
+    );
+    const nonce = makeNonce();
     html = html.replace("{{LOGO_URI}}", logoUri.toString());
     html = html.replace("{{IS_PRO_PLACEHOLDER}}", isPro() ? "true" : "false");
+    html = html.replace("{{ECHARTS_URI}}", echartsUri.toString());
+    html = html.split("{{CSP_SOURCE}}").join(webview.cspSource);
+    html = html.split("{{NONCE}}").join(nonce);
     return html;
   } catch {
     return `<html><body><h1>ARC Lens</h1><p>Could not load dashboard.html</p></body></html>`;
@@ -396,7 +768,7 @@ function openChatPanel(context: vscode.ExtensionContext) {
       cancelCurrentStream?.();
 
       const systemPrompt = buildSystemPrompt(
-        metricHistory,
+        metricHistory.toArray(),
         agentLog,
         activeTargetFile
       );
@@ -441,51 +813,32 @@ function openChatPanel(context: vscode.ExtensionContext) {
 // Pro: Script Generator Panel
 // ─────────────────────────────────────────────────────────────────────────────
 function getFriendlyModelName(): string {
-  const model = getLLMModel();
-  if (!model) return "AI Analyst";
-  // Normalize known models to a clean display name
-  const knownNames: Record<string, string> = {
-    "deepseek/deepseek-chat": "DeepSeek V3",
-    "deepseek/deepseek-r1": "DeepSeek R1",
-    "deepseek/deepseek-r1:free": "DeepSeek R1 (Free)",
-    "google/gemini-2.5-flash:free": "Gemini 2.5 Flash (Free)",
-    "meta-llama/llama-3.3-70b-instruct:free": "Llama 3.3 70B (Free)",
-    "anthropic/claude-3.5-sonnet": "Claude 3.5 Sonnet",
-    "openai/gpt-4o": "GPT-4o",
-    "openai/gpt-4o-mini": "GPT-4o Mini",
-    "google/gemini-2.0-flash-001": "Gemini 2.0 Flash",
-  };
-  
-  if (knownNames[model]) {
-    return knownNames[model];
-  }
-  
-  // Dynamic fallback: splits 'vendor/model-name-here:free' to 'Model Name Here (Free)'
-  const parts = model.split('/');
-  let rawName = parts[parts.length - 1] || model;
-  let isFree = false;
-  if (rawName.endsWith(':free')) {
-    isFree = true;
-    rawName = rawName.slice(0, -5);
-  }
-  
-  const formatted = rawName
-    .split(/[-_]/)
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ');
-    
-  return isFree ? `${formatted} (Free)` : formatted;
+  return friendlyModelName(getLLMModel());
 }
 
 function openGeneratorPanel(context: vscode.ExtensionContext) {
+  if (generatorPanel) {
+    generatorPanel.reveal(vscode.ViewColumn.Beside);
+    return;
+  }
+
   const genPanel = vscode.window.createWebviewPanel(
     "arcLensGenerator",
     "ARC Script Generator",
     vscode.ViewColumn.Beside,
     { enableScripts: true }
   );
+  generatorPanel = genPanel;
 
   genPanel.webview.html = getGeneratorHtml(getFriendlyModelName());
+
+  // Without this the panel is unreachable after being closed, its in-flight
+  // request keeps streaming, and postMessage fires at a disposed webview.
+  genPanel.onDidDispose(() => {
+    cancelGeneratorStream?.();
+    cancelGeneratorStream = null;
+    generatorPanel = undefined;
+  });
 
   genPanel.webview.onDidReceiveMessage(async (msg) => {
     if (msg.command !== "generate") return;
@@ -495,11 +848,15 @@ function openGeneratorPanel(context: vscode.ExtensionContext) {
 
     genPanel.webview.postMessage({ type: "generating" });
 
+    cancelGeneratorStream?.();
+
     let fullResponse = "";
-    streamChatCompletion(
+    cancelGeneratorStream = streamChatCompletion(
       messages,
       (chunk) => { fullResponse += chunk; },
       async () => {
+        cancelGeneratorStream = null;
+        if (!generatorPanel) return; // panel closed mid-stream
         const code = extractCodeBlock(fullResponse, req.outputFormat);
         if (!code) {
           genPanel.webview.postMessage({ type: "error", text: "Failed to extract code from response. Try rephrasing your task description." });
@@ -523,6 +880,8 @@ function openGeneratorPanel(context: vscode.ExtensionContext) {
         genPanel.webview.postMessage({ type: "done" });
       },
       (err) => {
+        cancelGeneratorStream = null;
+        if (!generatorPanel) return;
         genPanel.webview.postMessage({ type: "error", text: err });
       }
     );
@@ -533,9 +892,10 @@ function openGeneratorPanel(context: vscode.ExtensionContext) {
 // Pro: Webview HTML helpers
 // ─────────────────────────────────────────────────────────────────────────────
 function getChatHtml(modelName: string): string {
+  const nonce = makeNonce();
   return `<!DOCTYPE html><html lang="en"><head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'unsafe-inline';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'nonce-${nonce}';">
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <title>ARC Analyst</title>
 <style>
@@ -828,7 +1188,7 @@ header{
 </style></head><body>
 <header>
   <div class="title">ARC Analyst <span class="pro-badge">PRO</span> <span class="model-badge">${modelName}</span></div>
-  <button class="btn-clear" onclick="clearChat()">Clear</button>
+  <button class="btn-clear" id="btn-clear">Clear</button>
 </header>
 <div id="messages">
   <div class="empty-state" id="empty-state">
@@ -843,19 +1203,19 @@ header{
 <div class="input-area">
   <div class="prompt-container">
     <textarea id="user-input" placeholder="Why did the gradient explode at step 40?" rows="1"
-      onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
+      ></textarea>
     <div class="prompt-footer">
       <div class="telemetry-pill">
         <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
         Telemetry Attached
       </div>
-      <button class="btn-send" id="btn-send" onclick="sendMessage()">
+      <button class="btn-send" id="btn-send">
         <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
       </button>
     </div>
   </div>
 </div>
-<script>
+<script nonce="${nonce}">
 const vscode = acquireVsCodeApi();
 let streaming = false;
 let streamEl = null;
@@ -908,6 +1268,14 @@ function renderMarkdown(text){
 
 function scrollBottom(){const m=document.getElementById('messages');m.scrollTop=m.scrollHeight}
 
+// Listeners rather than inline handlers: this panel renders model output into
+// the DOM, so it is the one webview where a nonce-only CSP matters most.
+document.getElementById('btn-clear').addEventListener('click', clearChat);
+document.getElementById('btn-send').addEventListener('click', sendMessage);
+const inputEl = document.getElementById('user-input');
+inputEl.addEventListener('keydown', handleKey);
+inputEl.addEventListener('input', () => autoResize(inputEl));
+
 window.addEventListener('message',e=>{
   const msg=e.data;
   if(msg.type==='stream_start'){
@@ -936,9 +1304,10 @@ window.addEventListener('message',e=>{
 }
 
 function getGeneratorHtml(modelName: string): string {
+  const nonce = makeNonce();
   return `<!DOCTYPE html><html lang="en"><head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'unsafe-inline';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'nonce-${nonce}';">
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <title>ARC Script Generator</title>
 <style>
@@ -1169,8 +1538,8 @@ textarea{
     <div class="form-group">
       <label>Output Format</label>
       <div class="format-toggle">
-        <div class="format-btn active" id="btn-py" onclick="setFormat('py')">.py Script</div>
-        <div class="format-btn" id="btn-ipynb" onclick="setFormat('ipynb')">.ipynb Notebook</div>
+        <div class="format-btn active" id="btn-py" data-fmt="py">.py Script</div>
+        <div class="format-btn" id="btn-ipynb" data-fmt="ipynb">.ipynb Notebook</div>
       </div>
     </div>
   </div>
@@ -1178,11 +1547,11 @@ textarea{
     <label>Extra requirements (optional)</label>
     <input type="text" id="notes" placeholder="e.g. Mixed precision, cosine LR schedule, gradient clipping">
   </div>
-  <button class="btn-generate" id="btn-gen" onclick="generate()">Generate ARC-Tested Script</button>
+  <button class="btn-generate" id="btn-gen">Generate ARC-Tested Script</button>
   <div class="status" id="status-gen">🔄 Generating with ${modelName}... this may take 15–30 seconds.</div>
   <div class="status" id="status-err"></div>
 </div>
-<script>
+<script nonce="${nonce}">
 const vscode=acquireVsCodeApi();
 let fmt='py';
 function setFormat(f){fmt=f;document.getElementById('btn-py').className='format-btn'+(f==='py'?' active':'');document.getElementById('btn-ipynb').className='format-btn'+(f==='ipynb'?' active':'');}
@@ -1209,6 +1578,9 @@ function showStatus(id, cls, text) {
 function hideStatus(id) {
   document.getElementById(id).className = 'status';
 }
+document.getElementById('btn-gen').addEventListener('click', generate);
+document.querySelectorAll('[data-fmt]').forEach(el =>
+  el.addEventListener('click', () => setFormat(el.dataset.fmt)));
 window.addEventListener('message',e=>{
   const msg=e.data;
   if(msg.type==='generating'){
@@ -1230,7 +1602,18 @@ window.addEventListener('message',e=>{
 export function deactivate() {
   if (activeProcess) {
     activeProcess.kill("SIGTERM");
+    activeProcess = undefined;
   }
+  // Both streams, not just the chat one. An in-flight generator request used to
+  // outlive deactivation, holding an open HTTPS connection with nothing left to
+  // deliver its response to.
   cancelCurrentStream?.();
+  cancelCurrentStream = null;
+  cancelGeneratorStream?.();
+  cancelGeneratorStream = null;
+
+  chatPanel?.dispose();
+  generatorPanel?.dispose();
+  panel?.dispose();
 }
 

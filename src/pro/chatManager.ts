@@ -55,7 +55,7 @@ export function streamChatCompletion(
     headers["x-api-key"] = apiKey;
     headers["anthropic-version"] = "2023-06-01";
     if (!model.includes("claude")) {
-      model = "claude-3-5-sonnet-20241022";
+      model = "claude-opus-5";
     }
   } else if (isGemini) {
     hostname = "generativelanguage.googleapis.com";
@@ -112,14 +112,31 @@ export function streamChatCompletion(
   };
 
   let buffer = "";
+
+  // Every terminal path below can be reached more than once for a single
+  // request: the SSE stream sends `data: [DONE]`, and then the socket also
+  // fires `end`. Calling onDone twice appended the assistant's reply to the
+  // chat history twice, which then went back to the model as context on the
+  // next turn. Errors compound it further — onError is always followed by
+  // onDone, and `end` can still arrive after both.
+  let settled = false;
+  let cancelled = false;
+  const finish = () => {
+    if (settled) return;
+    settled = true;
+    onDone();
+  };
+  const fail = (message: string) => {
+    if (settled) return;
+    onError(message);
+    finish();
+  };
+
   const req = https.request(options, (res) => {
     if (res.statusCode && res.statusCode >= 400) {
       let errBody = "";
       res.on("data", (d: Buffer) => (errBody += d.toString()));
-      res.on("end", () => {
-        onError(`API error ${res.statusCode}: ${errBody}`);
-        onDone();
-      });
+      res.on("end", () => fail(`API error ${res.statusCode}: ${errBody}`));
       return;
     }
 
@@ -133,7 +150,7 @@ export function streamChatCompletion(
         if (!trimmed || !trimmed.startsWith("data: ")) continue;
         const data = trimmed.slice(6);
         if (data === "[DONE]") {
-          onDone();
+          finish();
           return;
         }
         try {
@@ -148,26 +165,25 @@ export function streamChatCompletion(
       }
     });
 
-    res.on("end", () => {
-      onDone();
-    });
-
-    res.on("error", (err: Error) => {
-      onError(err.message);
-      onDone();
-    });
+    res.on("end", finish);
+    res.on("error", (err: Error) => fail(err.message));
   });
 
   req.on("error", (err: Error) => {
-    onError(err.message);
-    onDone();
+    // Destroying the request to cancel a stream also emits 'error'. That is the
+    // caller's own doing, so it must not surface as an API failure in the chat.
+    if (cancelled) {
+      finish();
+      return;
+    }
+    fail(err.message);
   });
 
   req.write(body);
   req.end();
 
-  // Return cancel function
   return () => {
+    cancelled = true;
     req.destroy();
   };
 }

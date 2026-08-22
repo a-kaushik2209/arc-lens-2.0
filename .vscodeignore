@@ -1,18 +1,33 @@
 .vscode/**
 src/**
 tsconfig.json
-scripts/**
 data/**
+docs/**
 *.vsix
 .gitignore
 package-lock.json
 node_modules/**
-media/demo_dashboard.html
 PUBLISHING.md
 **/__pycache__/**
 **/*.pyc
-python/**
-context.md
-arc_lens_business_plan.md
-ARC_FUNDING_PROPOSAL.md
+**/*.js.map
+# Patterns meant to match at any depth need an explicit **/ prefix here.
+# .vscodeignore is not gitignore: a bare `*.md` only matches top-level entries,
+# which silently shipped every docs/*.md file into an earlier release.
+**/*.md
+!README.md
+.claude/**
+*.zip
 private_backup/**
+tests/**
+.github/**
+.bench_workload.py
+
+# python/ is deliberately NOT excluded.
+#
+# The instrumentation ships as readable .py files. It used to be base64-encoded
+# into extension.js, written to globalStorage at runtime and executed from
+# there — which is the textbook packer pattern regardless of intent, and it hid
+# the one part of this extension a security reviewer most needs to read.
+# Shipping plain source is both the correct posture for an AGPL project and the
+# honest answer to a scanner flag.

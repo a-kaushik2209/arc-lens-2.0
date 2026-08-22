@@ -44,15 +44,22 @@ export function buildSystemPrompt(
   const lossValues = metrics
     .map((m) => m.loss)
     .filter((l): l is number => l !== null);
-  const lossMin = lossValues.length ? Math.min(...lossValues).toExponential(3) : "N/A";
-  const lossMax = lossValues.length ? Math.max(...lossValues).toExponential(3) : "N/A";
+  // reduce, not Math.max(...array): the metric history is capped at 10 000
+  // entries, and spreading an array that size into a call is close enough to
+  // the engine's argument limit that raising the cap would turn this into a
+  // stack overflow rather than a slow function.
+  const minOf = (xs: number[]) => xs.reduce((a, b) => (b < a ? b : a), Infinity);
+  const maxOf = (xs: number[]) => xs.reduce((a, b) => (b > a ? b : a), -Infinity);
+
+  const lossMin = lossValues.length ? minOf(lossValues).toExponential(3) : "N/A";
+  const lossMax = lossValues.length ? maxOf(lossValues).toExponential(3) : "N/A";
   const lossFinal = lossValues.length
     ? lossValues[lossValues.length - 1].toExponential(3)
     : "N/A";
 
   // Summarize gradient norms
-  const gradValues = metrics.map((m) => m.grad_norm);
-  const gradMax = gradValues.length ? Math.max(...gradValues).toExponential(3) : "N/A";
+  const gradValues = metrics.map((m) => m.grad_norm).filter((g) => typeof g === "number");
+  const gradMax = gradValues.length ? maxOf(gradValues).toExponential(3) : "N/A";
 
   // Last few LR values
   const lrValues = metrics.map((m) => m.lr);
@@ -60,17 +67,28 @@ export function buildSystemPrompt(
     ? lrValues[lrValues.length - 1].toExponential(3)
     : "N/A";
 
+  // Every field is treated as possibly absent.
+  //
+  // `grad_norm` and `lr` were formatted unguarded, so a single metric missing
+  // either — which happens when ARC cannot observe a value, or when a line
+  // arrived truncated — threw inside the async message handler. That surfaced as
+  // an unhandled rejection and a chat panel that simply never replied.
+  const exp = (v: unknown, digits: number): string =>
+    typeof v === "number" && isFinite(v) ? v.toExponential(digits) : "-";
+  const fixed = (v: unknown, digits: number): string =>
+    typeof v === "number" && isFinite(v) ? v.toFixed(digits) : "-";
+
   // Build a compact step-sampled trace (max 40 rows to keep token usage low)
   const sample = sampleTrace(metrics, 40);
   const traceRows = sample
     .map((m) =>
       [
         m.step,
-        m.loss === null ? "NaN" : m.loss.toExponential(3),
-        m.grad_norm.toExponential(3),
-        m.lr.toExponential(2),
-        m.advanced?.effective_rank?.toFixed(2) ?? "-",
-        m.advanced?.weight_update_ratio?.toExponential(3) ?? "-",
+        m.loss === null || m.loss === undefined ? "NaN" : exp(m.loss, 3),
+        exp(m.grad_norm, 3),
+        exp(m.lr, 2),
+        fixed(m.advanced?.effective_rank, 2),
+        exp(m.advanced?.weight_update_ratio, 3),
       ].join("\t")
     )
     .join("\n");

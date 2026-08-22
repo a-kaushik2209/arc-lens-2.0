@@ -1,226 +1,238 @@
 """
-A PyTorch training script for ARC Lens to monitor.
-Architecture: 3-layer MLP with BatchNorm and Dropout, trained on a 
-non-linearly separable synthetic dataset (two interleaved Gaussian clusters).
+ARC Lens — reference training script
+====================================
+
+A real convolutional network trained on real CIFAR-10. Nothing here is
+simulated: no injected NaN, no scripted failure step, no hardcoded curve.
+
+**Why it is unstable.** The hyperparameters are deliberately aggressive in a way
+a practitioner plausibly gets wrong: a high peak learning rate for this
+architecture, a very short warmup, and no gradient clipping. That is the single
+most common real cause of a diverged run. Whether it actually diverges — and at
+which step — depends on the data order and the initialisation, so it is genuinely
+not known in advance. That is the point: ARC has to *detect* the failure rather
+than be told where it is.
+
+Run it two ways to see what ARC is worth:
+
+    ARC_MODE=baseline   interventions suppressed, telemetry only
+    ARC_MODE=active     interventions applied  (default)
+
+Both arms are seeded identically, so any divergence between them is caused by
+the interventions and nothing else.
 """
+
+import json
+import math
+import os
+import time
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, TensorDataset
-import time
-import os
-import math
+from torch.utils.data import DataLoader
+
+SEED = int(os.environ.get("ARC_DEMO_SEED", "1234"))
+torch.manual_seed(SEED)
+torch.cuda.manual_seed_all(SEED)
+
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+EPOCHS = int(os.environ.get("ARC_DEMO_EPOCHS", "6"))
+BATCH_SIZE = int(os.environ.get("ARC_DEMO_BATCH", "128"))
+# 0.5 with SGD+momentum on a 9-layer CNN is past the edge of stability for this
+# architecture. It is not an absurd number — it is the kind of value copied from
+# a paper that used a different model, a different batch size and warmup.
+PEAK_LR = float(os.environ.get("ARC_DEMO_LR", "0.5"))
+WARMUP_STEPS = int(os.environ.get("ARC_DEMO_WARMUP", "60"))
+DATA_ROOT = os.environ.get("ARC_DEMO_DATA", os.path.join(os.path.dirname(__file__), "..", "data", "cifar"))
 
 
-torch.manual_seed(42)
+# ─────────────────────────────────────────────────────────────────────────────
+# Model — 9 parameterised layers, deep enough for layer-wise gradient-flow
+# diagnostics to be meaningful (they compare early against late quartiles).
+# ─────────────────────────────────────────────────────────────────────────────
 
-
-N = 10000
-FEATURES = 32
-
-
-centres_0 = torch.tensor([[ 1.5,  1.5], [-1.5, -1.5]])
-centres_1 = torch.tensor([[ 1.5, -1.5], [-1.5,  1.5]])
-
-def _make_cluster(centres, n, scale=0.6):
-    pts = []
-    for c in centres:
-        pts.append(torch.randn(n // len(centres), 2) * scale + c)
-    return torch.cat(pts, dim=0)
-
-X_2d_0 = _make_cluster(centres_0, N // 2)
-X_2d_1 = _make_cluster(centres_1, N // 2)
-X_2d = torch.cat([X_2d_0, X_2d_1], dim=0)
-y = torch.cat([torch.zeros(N // 2, dtype=torch.long),
-               torch.ones(N // 2, dtype=torch.long)], dim=0)
-
-torch.manual_seed(7)
-_proj = torch.randn(2, FEATURES) / math.sqrt(2)
-X = X_2d @ _proj + torch.randn(N, FEATURES) * 0.1  # small noise
-
-# Shuffle
-perm = torch.randperm(N)
-X, y = X[perm], y[perm]
-
-# Split
-n_train = int(N * 0.85)
-X_train, y_train = X[:n_train], y[:n_train]
-X_val,   y_val   = X[n_train:], y[n_train:]
-
-BATCH_SIZE = 32
-train_loader = DataLoader(
-    TensorDataset(X_train, y_train),
-    batch_size=BATCH_SIZE,
-    shuffle=True,
-    drop_last=True,
-)
-
-class ArcDemoMLP(nn.Module):
-    """
-    3-hidden-layer MLP with BatchNorm and Dropout.
-    Architecture: 32 -> 256 -> 128 -> 64 -> 2
-    """
-    def __init__(self, in_features: int = FEATURES, num_classes: int = 2):
+class ConvBlock(nn.Module):
+    def __init__(self, cin, cout, pool=False):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(in_features, 256),
-            nn.BatchNorm1d(256),
-            nn.ReLU(),
-            nn.Dropout(0.2),
+        self.conv = nn.Conv2d(cin, cout, 3, padding=1, bias=False)
+        self.bn = nn.BatchNorm2d(cout)
+        self.pool = pool
 
-            nn.Linear(256, 128),
-            nn.BatchNorm1d(128),
-            nn.ReLU(),
-            nn.Dropout(0.15),
+    def forward(self, x):
+        x = F.relu(self.bn(self.conv(x)))
+        return F.max_pool2d(x, 2) if self.pool else x
 
-            nn.Linear(128, 64),
-            nn.BatchNorm1d(64),
-            nn.ReLU(),
 
-            nn.Linear(64, num_classes),
+class DemoCNN(nn.Module):
+    """VGG-style CIFAR network, 2,788,042 parameters."""
+
+    def __init__(self, num_classes=10):
+        super().__init__()
+        self.features = nn.Sequential(
+            ConvBlock(3, 64), ConvBlock(64, 64, pool=True),
+            ConvBlock(64, 128), ConvBlock(128, 128, pool=True),
+            ConvBlock(128, 256), ConvBlock(256, 256, pool=True),
+            ConvBlock(256, 256),
+        )
+        self.head = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(256 * 4 * 4, 256),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.3),
+            nn.Linear(256, num_classes),
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)
+    def forward(self, x):
+        return self.head(self.features(x))
 
 
-model = ArcDemoMLP()
+def build_loaders():
+    from torchvision import datasets, transforms
+
+    train_tf = transforms.Compose([
+        transforms.RandomCrop(32, padding=4),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
+    ])
+    test_tf = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
+    ])
+
+    root = os.path.abspath(DATA_ROOT)
+    train = datasets.CIFAR10(root, train=True, download=True, transform=train_tf)
+    test = datasets.CIFAR10(root, train=False, download=True, transform=test_tf)
+
+    generator = torch.Generator().manual_seed(SEED)
+    return (
+        DataLoader(train, batch_size=BATCH_SIZE, shuffle=True, num_workers=0,
+                   drop_last=True, generator=generator),
+        DataLoader(test, batch_size=512, shuffle=False, num_workers=0),
+    )
 
 
-NUM_EPOCHS = 12
-STEPS_PER_EPOCH = len(train_loader)
-TOTAL_STEPS = NUM_EPOCHS * STEPS_PER_EPOCH
-
-BASE_LR = 3e-3
-WARMUP_STEPS = max(1, STEPS_PER_EPOCH // 2)       # warmup for first half epoch
-NAN_INJECTION_STEP = 400                            # step at which we simulate failure
-
-optimizer = torch.optim.Adam(
-    model.parameters(),
-    lr=BASE_LR,
-    weight_decay=1e-4,
-)
-
-# CosineAnnealing over the full run
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-    optimizer,
-    T_max=TOTAL_STEPS - WARMUP_STEPS,
-    eta_min=BASE_LR * 0.01,
-)
-
-step_delay = float(os.environ.get("ARC_STEP_DELAY", "0.03"))
-
-
-_grad_clip_enabled = False
-_grad_clip_max_norm = 1.0
-
-
-print("ARC Lens Demo — Starting training session.")
-print(f"  Dataset: {N} samples | {FEATURES} features | 2 classes (XOR clusters)")
-print(f"  Model: ArcDemoMLP (32->256->128->64->2) | Params: "
-      f"{sum(p.numel() for p in model.parameters()):,}")
-print(f"  Epochs: {NUM_EPOCHS} | Steps/epoch: {STEPS_PER_EPOCH} | "
-      f"Total steps: {TOTAL_STEPS}")
-print(f"  Optimizer: Adam (lr={BASE_LR}) | Schedule: CosineAnnealing")
-print(f"  Failure injection at step {NAN_INJECTION_STEP}")
-print()
-
-global_step = 0
-best_val_acc = 0.0
-_nan_injected = False
-training_start_time = time.time()
-
-for epoch in range(NUM_EPOCHS):
-
-    try:
-        _arc_epoch[0] = epoch  # noqa: F821  — injected by runner.py
-    except NameError:
-        pass  
-
+@torch.no_grad()
+def evaluate(model, loader):
+    model.eval()
+    correct = total = 0
+    loss_sum = 0.0
+    for x, y in loader:
+        x, y = x.to(DEVICE, non_blocking=True), y.to(DEVICE, non_blocking=True)
+        out = model(x)
+        loss_sum += F.cross_entropy(out, y, reduction="sum").item()
+        correct += (out.argmax(1) == y).sum().item()
+        total += y.numel()
     model.train()
-    epoch_loss = 0.0
-    epoch_correct = 0
-    epoch_total = 0
-
-    for batch_idx, (bx, by) in enumerate(train_loader):
-        global_step += 1
+    return loss_sum / max(1, total), 100.0 * correct / max(1, total)
 
 
-        if global_step == NAN_INJECTION_STEP and not _nan_injected:
-            _nan_injected = True
-            print(f"[Step {global_step}] SIMULATED DATA CORRUPTION: "
-                  "injecting NaN into input batch to trigger ARC recovery.")
-            # Corrupt the entire first sample — guarantees NaN propagates
-            # through BatchNorm and produces NaN loss
-            bx[0, :] = float("nan")
+def main():
+    train_loader, test_loader = build_loaders()
 
-        optimizer.zero_grad()
-        out = model(bx)
-        loss = F.cross_entropy(out, by)
+    model = DemoCNN().to(DEVICE)
+    optimizer = torch.optim.SGD(model.parameters(), lr=PEAK_LR, momentum=0.9, weight_decay=5e-4)
 
-        # ARC Lens monitors this backward() call
-        loss.backward()
+    steps_per_epoch = len(train_loader)
+    total_steps = EPOCHS * steps_per_epoch
 
-        # Apply gradient clipping if ARC enabled it after recovery
+    mode = os.environ.get("ARC_MODE", "active")
+    print(f"ARC Lens demo | device={DEVICE} mode={mode} seed={SEED}")
+    print(f"  model=DemoCNN params={sum(p.numel() for p in model.parameters()):,}")
+    print(f"  epochs={EPOCHS} batch={BATCH_SIZE} steps/epoch={steps_per_epoch} total={total_steps}")
+    print(f"  optimizer=SGD(momentum=0.9) peak_lr={PEAK_LR} warmup={WARMUP_STEPS} clipping=off")
+    print("  No failure is injected. Instability, if any, comes from these settings.")
+
+    global_step = 0
+    started = time.time()
+    best_acc = 0.0
+    final_loss, final_acc = float("nan"), 0.0
+
+    for epoch in range(EPOCHS):
+        # Optional helper that runner.py installs into builtins; harmless when
+        # this script is run bare.
+        #
+        # The guard is a bare NameError catch rather than an inspection of
+        # __builtins__, which is a module in some execution contexts and a dict
+        # in others — `hasattr` and `dir()` disagree between the two, so the
+        # previous check was simply always false and every metric reported
+        # epoch 0. A plain name lookup works in both cases.
         try:
-            if _arc_intervention_count[0] > 0:
-                _grad_clip_enabled = True
+            arc_set_epoch(epoch)  # noqa: F821 — injected by runner.py
         except NameError:
             pass
 
-        if _grad_clip_enabled:
-            nn.utils.clip_grad_norm_(model.parameters(), _grad_clip_max_norm)
+        running = correct = seen = 0
+        running_loss = 0.0
 
-        optimizer.step()
+        for x, y in train_loader:
+            global_step += 1
 
-        if global_step <= WARMUP_STEPS:
-            # Linear warmup from BASE_LR * 0.1 → BASE_LR
-            warmup_factor = 0.1 + 0.9 * (global_step / WARMUP_STEPS)
-            for pg in optimizer.param_groups:
-                pg["lr"] = BASE_LR * warmup_factor
-        else:
-            scheduler.step()
+            # Linear warmup, then cosine decay. The warmup is short on purpose.
+            if global_step <= WARMUP_STEPS:
+                scale = global_step / max(1, WARMUP_STEPS)
+            else:
+                progress = (global_step - WARMUP_STEPS) / max(1, total_steps - WARMUP_STEPS)
+                scale = 0.5 * (1 + math.cos(math.pi * min(1.0, progress)))
+            # A plain schedule that recomputes LR from the peak every step —
+            # exactly the pattern that erases a naive LR intervention. ARC
+            # re-asserts its own reduction on top of this (see enforce_lr).
+            for group in optimizer.param_groups:
+                group["lr"] = PEAK_LR * scale
 
-        loss_val = loss.item()
-        if math.isfinite(loss_val):
-            epoch_loss += loss_val
-            with torch.no_grad():
-                preds = out.argmax(dim=1)
-                epoch_correct += (preds == by).sum().item()
-                epoch_total += len(by)
+            x = x.to(DEVICE, non_blocking=True)
+            y = y.to(DEVICE, non_blocking=True)
+
+            optimizer.zero_grad(set_to_none=True)
+            out = model(x)
+            loss = F.cross_entropy(out, y)
+            loss.backward()
+            optimizer.step()
+
+            value = loss.item()
+            if math.isfinite(value):
+                running_loss += value
+                running += 1
+                correct += (out.argmax(1) == y).sum().item()
+                seen += y.numel()
+
+        train_loss = running_loss / max(1, running)
+        train_acc = 100.0 * correct / max(1, seen)
+        val_loss, val_acc = evaluate(model, test_loader)
+        best_acc = max(best_acc, val_acc)
+        final_loss, final_acc = val_loss, val_acc
+
+        print(
+            f"[epoch {epoch + 1}/{EPOCHS}] step={global_step} "
+            f"train_loss={train_loss:.4f} train_acc={train_acc:.2f}% "
+            f"val_loss={val_loss:.4f} val_acc={val_acc:.2f}% "
+            f"lr={optimizer.param_groups[0]['lr']:.4e} "
+            f"elapsed={time.time() - started:.0f}s"
+        )
+
+    elapsed = time.time() - started
+    print(f"Finished in {elapsed:.0f}s | best val_acc={best_acc:.2f}%")
+
+    # Structured result line so an A/B harness can compare arms without
+    # scraping the human-readable log.
+    #
+    # The final figures are the last epoch's, reused rather than recomputed —
+    # re-running `evaluate` here produced an identical number at the cost of a
+    # full extra pass over the test set.
+    print(json.dumps({
+        "type": "final_result",
+        "mode": os.environ.get("ARC_MODE", "active"),
+        "seed": SEED,
+        "peak_lr": PEAK_LR,
+        "epochs": EPOCHS,
+        "steps": global_step,
+        "best_val_acc": round(best_acc, 4),
+        "final_val_acc": round(final_acc, 4),
+        "final_val_loss": None if not math.isfinite(final_loss) else round(final_loss, 6),
+        "wall_seconds": round(elapsed, 2),
+    }), flush=True)
 
 
-        elapsed = time.time() - training_start_time
-        target_elapsed = (global_step / TOTAL_STEPS) * 130.0
-        sleep_needed = max(step_delay, target_elapsed - elapsed)
-        time.sleep(sleep_needed)
-
-    avg_loss = epoch_loss / max(1, epoch_total // BATCH_SIZE)
-    train_acc = 100.0 * epoch_correct / max(1, epoch_total)
-
-    # Validation pass
-    model.eval()
-    val_correct = 0
-    with torch.no_grad():
-        val_out = model(X_val)
-        val_correct = (val_out.argmax(dim=1) == y_val).sum().item()
-    val_acc = 100.0 * val_correct / len(y_val)
-    model.train()
-
-    if val_acc > best_val_acc:
-        best_val_acc = val_acc
-
-    current_lr = optimizer.param_groups[0]["lr"]
-    print(
-        f"[Epoch {epoch + 1}/{NUM_EPOCHS}] "
-        f"avg_loss={avg_loss:.4f} | "
-        f"train_acc={train_acc:.1f}% | "
-        f"val_acc={val_acc:.1f}% | "
-        f"lr={current_lr:.2e}"
-    )
-
-print()
-print("Training complete.")
-print(f"  Best validation accuracy: {best_val_acc:.1f}%")
-print("  ARC Lens monitored the full run and applied recovery where needed.")
+if __name__ == "__main__":
+    main()

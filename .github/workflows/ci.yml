@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  typescript:
+    name: TypeScript build + tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm ci || npm install
+      - run: npm run compile
+      - run: npm test
+
+  python:
+    name: Python harness tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # CPU torch: the harness tests exercise checkpointing, the LR guard and
+      # the full runner end to end, none of which need a GPU.
+      - run: pip install --index-url https://download.pytorch.org/whl/cpu torch
+      - run: pip install arc-training
+      - run: python tests/test_harness.py
+
+  secret-scan:
+    name: Reject secret-shaped literals
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # A signing secret shipped inside a published .vsix is unrecoverable —
+      # the bytes are public forever. This fails the build before that happens.
+      - name: Scan source for embedded credentials
+        run: |
+          set -e
+          pattern='(JWT_SECRET|API_KEY|SECRET_KEY)\s*[:=]\s*["'"'"'][^"'"'"']{8,}'
+          if grep -rEn "$pattern" src/ python/ media/ 2>/dev/null; then
+            echo "::error::Secret-shaped literal found in source."
+            exit 1
+          fi
+          # eyJ... is a base64url-encoded JWT header; a literal one in source is
+          # a token someone pasted in, not a variable.
+          if grep -rEn 'eyJ[A-Za-z0-9_-]{10,}\.' src/ python/ media/ 2>/dev/null; then
+            echo "::error::Hardcoded JWT found in source."
+            exit 1
+          fi
+          echo "No embedded credentials found."

@@ -2,7 +2,7 @@
   "name": "arc-lens",
   "displayName": "ARC Lens - Resilient ML Trainer",
   "description": "A real-time PyTorch training dashboard and automated recovery controller built for the ARC framework, featuring weight rollbacks, learning rate adaptation, and AI failure diagnostics.",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "publisher": "arclens",
   "repository": {
     "type": "git",
@@ -36,6 +36,16 @@
         "icon": "$(debug-stop)"
       },
       {
+        "command": "arc-lens.runBaseline",
+        "title": "Run Baseline (interventions off)",
+        "category": "ARC Lens"
+      },
+      {
+        "command": "arc-lens.exportReport",
+        "title": "Export Run Report",
+        "category": "ARC Lens"
+      },
+      {
         "command": "arc-lens.openChat",
         "title": "Open AI Failure Analyst",
         "category": "ARC Lens Pro"
@@ -60,23 +70,25 @@
       "properties": {
         "arcAgent.pythonPath": {
           "type": "string",
-          "default": "python",
-          "description": "Path to the Python interpreter to use (e.g. /home/user/.venv/bin/python)"
+          "default": "python3",
+          "scope": "machine",
+          "description": "Path to the Python interpreter to use (e.g. /home/user/.venv/bin/python). Cannot be set by workspace settings — this value is executed, and a cloned repo's .vscode/settings.json must not be able to silently point it at an arbitrary binary."
         },
         "arcAgent.stepDelay": {
           "type": "number",
-          "default": 0.02,
-          "description": "Artificial delay (in seconds) introduced after each training step to pace visualization. Default is 0.02s."
+          "default": 0,
+          "description": "Artificial delay (in seconds) added after each training step. Default 0 — this exists only for slowing a fast demo down enough to watch, and any non-zero value is real GPU time being thrown away."
         },
-        "arcAgent.licenseKey": {
-          "type": "string",
-          "default": "",
-          "description": "ARC Lens Pro license key. Get yours at https://arc-lens.dev/pro"
+        "arcAgent.gpuHourlyRate": {
+          "type": "number",
+          "default": 0,
+          "description": "Your GPU's cost per hour, used for the compute-savings figure in the dashboard. Leave at 0 to have ARC estimate it from the detected device; set it to your actual rate for an accurate number."
         },
         "arcAgent.openRouterKey": {
           "type": "string",
           "default": "",
-          "description": "[Pro] Your OpenRouter API key (sk-or-...). Used for AI Failure Analyst and Script Generator."
+          "scope": "machine",
+          "description": "API key for the AI features. The provider is detected from the prefix: sk-or-… (OpenRouter), gsk_… (Groq), sk-ant-… (Anthropic), AIzaSy… (Google), sk-… (OpenAI). Not workspace-overridable: a cloned repo's .vscode/settings.json must not be able to redirect your API key or the telemetry sent with it."
         },
         "arcAgent.llmModel": {
           "type": "string",
@@ -87,11 +99,11 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile && node scripts/embed_python.js",
-    "compile": "tsc -p ./ && node scripts/embed_python.js",
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "dev:enable": "node scripts/dev_enable.js",
-    "dev:disable": "node scripts/dev_disable.js"
+    "test": "node --test tests/",
+    "benchmark": "python python/benchmark_overhead.py"
   },
   "devDependencies": {
     "@types/vscode": "^1.85.0",
