@@ -19,7 +19,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("path");
 
-const { providerFor, modelForProvider } = require(path.join(__dirname, "..", "out", "pro", "providerRouting.js"));
+const { providerFor, modelForProvider, isSupportedKey } = require(path.join(__dirname, "..", "out", "pro", "providerRouting.js"));
 
 /** The shipped default for `arcAgent.llmModel` (see package.json). */
 const SHIPPED_DEFAULT = "google/gemini-2.5-flash:free";
@@ -36,6 +36,39 @@ test("routes each key prefix to its provider", () => {
   for (const [expected, key] of Object.entries(KEYS)) {
     assert.equal(providerFor(key), expected, `${key} should route to ${expected}`);
   }
+});
+
+test("every accepted key prefix is one the router recognises", () => {
+  // The drift that caused the bug: the allowlist and the routing were in
+  // different files, one of them untestable, and they disagreed. A prefix
+  // accepted here but unknown to providerFor is silently sent to OpenRouter.
+  const samples = {
+    "sk-or-v1-abc": "openrouter",
+    "gsk_abc": "groq",
+    "sk-ant-abc": "anthropic",
+    "AIzaSyAbc": "gemini",
+    "AQ.Ab8Abc": "gemini",
+    "sk-proj-abc": "openai",
+  };
+  for (const [key, provider] of Object.entries(samples)) {
+    assert.equal(isSupportedKey(key), true, `${key} should be accepted`);
+    assert.equal(providerFor(key), provider, `${key} should route to ${provider}`);
+  }
+});
+
+test("a key from a provider we cannot route is refused", () => {
+  assert.equal(isSupportedKey(""), false);
+  assert.equal(isSupportedKey("xai-abc123"), false);
+  assert.equal(isSupportedKey("hf_abc123"), false);
+});
+
+test("both of Google's key formats route to Gemini", () => {
+  // `AQ.…` is the newer one. It was missing from the prefix allowlist and from
+  // the routing here, so a key that works against
+  // generativelanguage.googleapis.com was refused in settings — and would have
+  // been routed to OpenRouter had it got that far.
+  assert.equal(providerFor("AIzaSyAbc123"), "gemini");
+  assert.equal(providerFor("AQ.Ab8Abc123"), "gemini");
 });
 
 test("an Anthropic key is not mistaken for OpenAI", () => {
@@ -73,6 +106,6 @@ test("a model meant for another provider falls back rather than being sent on", 
   // api.anthropic.com — the fallback is wrong-but-valid, which is recoverable;
   // a foreign id is a hard API error.
   assert.equal(modelForProvider("anthropic", "google/gemini-2.5-flash:free"), "claude-opus-5");
-  assert.equal(modelForProvider("gemini", "anthropic/claude-opus-5"), "gemini-1.5-flash");
+  assert.equal(modelForProvider("gemini", "anthropic/claude-opus-5"), "gemini-2.5-flash");
   assert.equal(modelForProvider("openai", "meta-llama/llama-3.3-70b"), "gpt-4o-mini");
 });

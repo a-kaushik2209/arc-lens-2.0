@@ -1,4 +1,7 @@
 import * as vscode from "vscode";
+import { isSupportedKey, SUPPORTED_KEY_HINT } from "./providerRouting";
+
+export { isSupportedKey };
 
 /**
  * Feature gating.
@@ -15,29 +18,6 @@ import * as vscode from "vscode";
  */
 export function isPro(): boolean {
   return true;
-}
-
-/**
- * Prefixes `chatManager` knows how to route.
- *
- * This list has to stay in step with the provider detection there. It only
- * accepted `sk-or-` and `gsk_`, which made the Anthropic, Gemini and OpenAI
- * branches in `chatManager` unreachable dead code — while the UI told the user
- * "the AI features need your own OpenRouter/Anthropic/OpenAI API key". Pasting a
- * valid `sk-ant-…` key produced "No OpenRouter API key configured", with nothing
- * to explain why a correct key had been refused.
- */
-const SUPPORTED_KEY_PREFIXES = [
-  "sk-or-",   // OpenRouter
-  "gsk_",     // Groq
-  "sk-ant-",  // Anthropic
-  "AIzaSy",   // Google AI Studio / Gemini
-  "sk-",      // OpenAI (and compatible); checked last, it is the loosest
-];
-
-/** True if the key looks like one of the providers we can route to. */
-export function isSupportedKey(key: string): boolean {
-  return SUPPORTED_KEY_PREFIXES.some((prefix) => key.startsWith(prefix));
 }
 
 /**
@@ -75,8 +55,7 @@ export function requireOpenRouterKey(): boolean {
   // "No key configured" is the wrong message when a key *is* configured and was
   // rejected — the user then has no way to tell that the prefix is the problem.
   const message = raw
-    ? `ARC Lens: the configured API key was not recognised. Expected one of: sk-or-… (OpenRouter), ` +
-      `gsk_… (Groq), sk-ant-… (Anthropic), AIzaSy… (Google), or sk-… (OpenAI).`
+    ? `ARC Lens: the configured API key was not recognised. Expected one of: ${SUPPORTED_KEY_HINT}.`
     : "ARC Lens: no API key configured. The AI features use your own key from OpenRouter, Groq, Anthropic, Google or OpenAI.";
 
   vscode.window.showErrorMessage(message, "Open Settings").then((sel) => {
