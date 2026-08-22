@@ -201,6 +201,10 @@ header {
   background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 8px;
   padding: 15px 24px; box-shadow: var(--panel-shadow);
   display: flex; align-items: center; gap: 0;
+  /* body sets overflow-x:hidden, so anything too wide is silently clipped
+     rather than scrollable. In a narrow VS Code side panel four nowrap
+     labels plus three trace lines overflow — wrap onto a second row. */
+  flex-wrap: wrap; row-gap: 12px;
 }
 .stepper-step { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
 .stepper-dot {
@@ -298,7 +302,7 @@ header {
 /* Dense Datadog/Grafana-style stat tile row */
 .metrics-container {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(190px, 100%), 1fr));
   gap: 10px;
 }
 
@@ -433,7 +437,9 @@ header {
 
 .charts-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(460px, 1fr));
+  /* min() so the track can go below its preferred width instead of forcing a
+     460px column into a narrower panel, which body's overflow-x:hidden clips. */
+  grid-template-columns: repeat(auto-fit, minmax(min(460px, 100%), 1fr));
   gap: 14px;
 }
 
@@ -564,32 +570,32 @@ header {
   <div class="metrics-container">
     <div class="metric-card" id="card-loss" style="--metric-accent: var(--accent-blue);">
       <div class="metric-label">Loss</div>
-      <div class="metric-value" id="val-loss">0.000</div>
-      <div class="metric-subtext" id="val-loss-diff">-</div>
+      <div class="metric-value" id="val-loss">—</div>
+      <div class="metric-subtext" id="val-loss-diff">—</div>
       <div class="metric-sparkline" id="spark-loss"></div>
     </div>
     <div class="metric-card" id="card-grad" style="--metric-accent: var(--accent-orange);">
       <div class="metric-label">Gradient L2 Norm</div>
-      <div class="metric-value" id="val-grad">0.000</div>
-      <div class="metric-subtext" id="val-grad-level">-</div>
+      <div class="metric-value" id="val-grad">—</div>
+      <div class="metric-subtext" id="val-grad-ratio">—</div>
       <div class="metric-sparkline" id="spark-grad"></div>
     </div>
     <div class="metric-card" style="--metric-accent: var(--text-tertiary);">
       <div class="metric-label">Learning Rate</div>
-      <div class="metric-value" id="val-lr">0.00e0</div>
-      <div class="metric-subtext" id="val-gpu">GPU Memory: 0 MB</div>
+      <div class="metric-value" id="val-lr">—</div>
+      <div class="metric-subtext" id="val-gpu">GPU: —</div>
     </div>
     <div class="metric-card" style="--metric-accent: var(--text-tertiary);">
       <div class="metric-label">Step / Epoch</div>
-      <div class="metric-value"><span id="val-step">0</span><span style="color:var(--text-secondary);font-size:16px;font-weight:400;margin:0 3px;">/</span><span id="val-epoch" style="color:var(--text-secondary)">0</span></div>
+      <div class="metric-value"><span id="val-step">—</span><span style="color:var(--text-secondary);font-size:16px;font-weight:400;margin:0 3px;">/</span><span id="val-epoch" style="color:var(--text-secondary)">—</span></div>
       <div class="metric-subtext">Training progress</div>
     </div>
     <div class="metric-card risk-hero" id="card-risk">
       <div class="risk-gauge-wrap" id="risk-gauge"></div>
       <div class="risk-hero-text">
         <div class="risk-hero-label">System Risk</div>
-        <div class="risk-hero-value" id="val-risk" style="color:var(--accent-green);">LOW</div>
-        <div class="risk-hero-score" id="val-risk-score">score 0.00</div>
+        <div class="risk-hero-value" id="val-risk" style="color:var(--text-secondary);">—</div>
+        <div class="risk-hero-score" id="val-risk-score">not yet scored</div>
       </div>
     </div>
   </div>
@@ -1782,18 +1788,25 @@ function handleMessage(msg) {
       // The tiles are read back as well as written: the loss delta is computed
       // against whatever #val-loss holds, so a stale value produced a delta
       // measured across two different runs.
-      document.getElementById('val-loss').textContent = '0.000';
-      document.getElementById('val-loss-diff').textContent = '-';
+      // Reset to the same "no reading yet" placeholders the page ships with,
+      // not to zeros: a run that has emitted nothing has no loss of 0.000 and
+      // no LOW risk, and a green gauge before the first sample is a claim the
+      // dashboard has no basis for.
+      document.getElementById('val-loss').textContent = '—';
+      document.getElementById('val-loss-diff').textContent = '—';
       document.getElementById('val-loss-diff').className = 'metric-subtext';
-      document.getElementById('val-grad').textContent = '0.000';
-      document.getElementById('val-lr').textContent = '0.00e0';
-      document.getElementById('val-gpu').textContent = 'GPU Memory: 0 MB';
-      document.getElementById('val-step').textContent = '0';
-      document.getElementById('val-epoch').textContent = '0';
-      document.getElementById('val-risk').textContent = 'LOW';
-      document.getElementById('val-risk').style.color = 'var(--accent-green)';
-      document.getElementById('val-risk-score').textContent = 'score 0.00';
-      updateRiskGauge(0, 'var(--accent-green)');
+      document.getElementById('val-loss-diff').style.color = '';
+      document.getElementById('val-grad').textContent = '—';
+      document.getElementById('val-grad-ratio').textContent = '—';
+      document.getElementById('val-grad-ratio').style.color = '';
+      document.getElementById('val-lr').textContent = '—';
+      document.getElementById('val-gpu').textContent = 'GPU: —';
+      document.getElementById('val-step').textContent = '—';
+      document.getElementById('val-epoch').textContent = '—';
+      document.getElementById('val-risk').textContent = '—';
+      document.getElementById('val-risk').style.color = 'var(--text-secondary)';
+      document.getElementById('val-risk-score').textContent = 'not yet scored';
+      updateRiskGauge(0, 'var(--text-secondary)');
       updateSparkline('spark-loss', [], 'var(--accent-blue)');
       updateSparkline('spark-grad', [], 'var(--accent-blue)');
       runStartTime = Date.now();
@@ -1891,6 +1904,22 @@ function handleMessage(msg) {
       // flowing); showing "0.000" for an absent field would hide that.
       document.getElementById('val-grad').textContent =
         typeof msg.grad_norm === 'number' ? msg.grad_norm.toExponential(3) : '—';
+      // Grad norm spans orders of magnitude, so an absolute delta is unreadable
+      // where it matters most. The step-over-step ratio is the shape of an
+      // explosion — both values are measured, the ratio is just their quotient.
+      {
+        const ratioEl = document.getElementById('val-grad-ratio');
+        const prevG = gradNorms.length > 1 ? gradNorms[gradNorms.length - 2] : null;
+        const curG = typeof msg.grad_norm === 'number' ? msg.grad_norm : null;
+        if (prevG !== null && curG !== null && prevG > 0) {
+          const r = curG / prevG;
+          ratioEl.textContent = `×${r < 100 ? r.toFixed(2) : r.toExponential(1)} vs last step`;
+          ratioEl.style.color = r > 1 ? 'var(--accent-red)' : r < 1 ? 'var(--accent-green)' : '';
+        } else {
+          ratioEl.textContent = '—';
+          ratioEl.style.color = '';
+        }
+      }
       // Same rule as grad_norm above, and for the same reason: an absent field
       // rendered "0.00e0" / "0.0 MB", which is a fabricated measurement rather
       // than a gap. Both are also legitimately zero — the cosine schedule ends
