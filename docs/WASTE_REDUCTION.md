@@ -141,6 +141,60 @@ its behaviour under sustained elevated risk is untested.
 
 ---
 
+## 3a. The demo run — a silent death, caught, and 82 % still burned
+
+The single most demonstrable run in this project. Real CIFAR-10, real CNN,
+`ARC_MODE=baseline`, `lr=0.5`, 4 epochs — no injected failure, no scripted
+curve. Measured on the shipped code, 2026-08-22:
+
+```
+detected           loss_plateau @ step 316, at 15.32 s
+run finished       85.91 s  (1,560 steps, all 4 epochs)
+burned after ARC   70.59 s
+already knew       = 82.2 % of the run
+```
+
+What the run actually did, epoch by epoch:
+
+| epoch | step | train loss | train acc | val acc | lr |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 390 | 2.3076 | 10.54 % | **10.00 %** | 4.43e-01 |
+| 2 | 780 | 2.3090 | 9.96 % | **10.00 %** | 2.66e-01 |
+| 3 | 1170 | 2.3054 | 10.06 % | **10.00 %** | 7.89e-02 |
+| 4 | 1560 | 2.3030 | 9.97 % | **10.00 %** | 0.00e+00 |
+
+CIFAR-10 has ten classes. **10.00 % validation accuracy is random guessing, and
+the loss is pinned at 2.303 = ln(10).** This model learned nothing, for four
+epochs, while every loss curve on the dashboard looked flat-but-plausible and no
+NaN, no gradient spike and no rank collapse ever fired. It is exactly the failure
+mode that motivated the `loss_plateau` rule, and exactly the one a human watching
+a loss curve does not catch quickly.
+
+ARC knew at **15.32 s**. The run kept going for another **70.59 s** — 82.2 % of
+its total compute — because nothing stopped it.
+
+**That gap is the product.** ARC does not act on this failure and says so: no
+response to a plateau has survived measurement, and the one that was tried made a
+recoverable run terminal. What it does instead is put a named verdict and a live
+cost counter on screen at second 15, so the 70 seconds after it are a choice
+rather than an accident. On this 86-second demo that is fractions of a cent. On
+the 48-hour run the funding proposal describes, 82 % is a day and a half of GPU
+time spent after the answer was already known.
+
+**Reproduce it:**
+
+```bash
+ARC_MODE=baseline ARC_DEMO_LR=0.5 ARC_DEMO_EPOCHS=4 \
+  python python/runner.py python/train_demo.py
+```
+
+Whether the plateau lands at step 316 exactly depends on data order and
+initialisation — the rule is not told where to look. What reproduces is the
+shape: a run pinned at chance, detected early, and the large majority of the
+compute spent after detection.
+
+---
+
 ## 3. Unrecoverable Stop — computation waste
 
 The question: once ARC knows a run is failing, how much compute does the run
