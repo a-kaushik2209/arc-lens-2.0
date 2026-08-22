@@ -61,7 +61,7 @@ The script you produce will be run under ARC Lens, which monitors training and r
 
 ## Output format
 - If outputFormat is "py": output a single complete Python script inside a \`\`\`python block
-- If outputFormat is "ipynb": output a series of cells as JSON in \`\`\`json format following the Jupyter notebook v4 schema
+- If outputFormat is "ipynb": output one complete notebook object as JSON in a \`\`\`json block — an object with "cells", "metadata", "nbformat": 4 and "nbformat_minor", following the Jupyter notebook v4 schema. Not a bare array of cells.
 
 Do NOT include any prose outside the code block. Just the code.`;
 
@@ -81,6 +81,57 @@ Remember: plain PyTorch with no ARC imports, a scalar \`loss.backward()\` follow
     { role: "system", content: systemPrompt },
     { role: "user", content: userPrompt },
   ];
+}
+
+/**
+ * Validates extracted notebook text, returning the JSON to write or an error.
+ *
+ * Nothing checked the .ipynb path before this: whatever came out of the fence
+ * was written straight to disk, so a trailing comma or a leaked sentence
+ * produced a file Jupyter and VS Code both refuse to open — with a "saved"
+ * toast claiming success. A bare `[...]` cell array is accepted and wrapped,
+ * because that is the shape a model most often returns and rejecting it would
+ * throw away a usable notebook over an envelope this function can supply.
+ */
+export function normalizeNotebook(text: string): { json: string } | { error: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (e) {
+    return { error: `the model's notebook output is not valid JSON — ${(e as Error).message}` };
+  }
+
+  const nb: Record<string, unknown> = Array.isArray(parsed)
+    ? { cells: parsed }
+    : (parsed as Record<string, unknown>);
+
+  if (!nb || typeof nb !== "object" || !Array.isArray(nb.cells)) {
+    return { error: "the model's notebook output has no `cells` array." };
+  }
+
+  // Supply the envelope rather than demand it: nbformat/metadata are boilerplate
+  // a model routinely omits, and their absence says nothing about the cells.
+  nb.nbformat = typeof nb.nbformat === "number" ? nb.nbformat : 4;
+  nb.nbformat_minor = typeof nb.nbformat_minor === "number" ? nb.nbformat_minor : 5;
+  if (!nb.metadata || typeof nb.metadata !== "object") {
+    nb.metadata = { kernelspec: { name: "python3", display_name: "Python 3", language: "python" } };
+  }
+
+  for (const cell of nb.cells as Array<Record<string, unknown>>) {
+    if (!cell || typeof cell !== "object" || typeof cell.cell_type !== "string") {
+      return { error: "the model's notebook contains a cell with no `cell_type`." };
+    }
+    if (typeof cell.source !== "string" && !Array.isArray(cell.source)) {
+      return { error: `a ${cell.cell_type} cell has no \`source\`.` };
+    }
+    if (!cell.metadata || typeof cell.metadata !== "object") cell.metadata = {};
+    if (cell.cell_type === "code") {
+      if (!Array.isArray(cell.outputs)) cell.outputs = [];
+      if (typeof cell.execution_count !== "number") cell.execution_count = null;
+    }
+  }
+
+  return { json: JSON.stringify(nb, null, 1) };
 }
 
 /**

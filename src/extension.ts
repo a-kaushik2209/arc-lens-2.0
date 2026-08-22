@@ -5,7 +5,7 @@ import * as fs from "fs";
 import { isPro, promptUpgrade, getLLMModel, requireOpenRouterKey, shouldBypassArcCheck } from "./pro/licenseManager";
 import { buildSystemPrompt, MetricPoint, AgentLogEntry } from "./pro/contextBuilder";
 import { streamChatCompletion, ChatMessage } from "./pro/chatManager";
-import { buildScriptGenMessages, extractCodeBlock, ScriptGenRequest } from "./pro/scriptGenerator";
+import { buildScriptGenMessages, extractCodeBlock, normalizeNotebook, ScriptGenRequest } from "./pro/scriptGenerator";
 import { buildReportHtml, RunRecord } from "./pro/reportBuilder";
 import { friendlyModelName } from "./pro/modelName";
 import { RingBuffer } from "./pro/ringBuffer";
@@ -17,15 +17,34 @@ let panel: vscode.WebviewPanel | undefined;
 let chatPanel: vscode.WebviewPanel | undefined;
 let generatorPanel: vscode.WebviewPanel | undefined;
 let cancelGeneratorStream: (() => void) | null = null;
+/** See `chatGeneration` — the generator panel has the identical race. */
+let generatorGeneration = 0;
 let activeProcess: cp.ChildProcess | undefined;
 /** Set by the Stop command so a deliberate SIGTERM is not reported as a crash. */
 let stoppedByUser = false;
 
 const metricHistory = new RingBuffer<MetricPoint>(10000);
-const agentLog: AgentLogEntry[] = [];
+// Capped like the metric history, and for a stronger reason: every entry is
+// inlined verbatim into the system prompt (metrics are sampled down to 40
+// rows first), so an unstable run that trips ARC repeatedly used to grow the
+// prompt without bound until each chat turn was mostly stale log.
+const agentLog = new RingBuffer<AgentLogEntry>(2000);
 let activeTargetFile = "";
 let chatHistory: ChatMessage[] = [];
 let cancelCurrentStream: (() => void) | null = null;
+/**
+ * Which chat request owns `cancelCurrentStream` and the next assistant turn.
+ *
+ * Destroying a request's socket makes it emit `error` on a *later* tick, so a
+ * superseded request's callbacks still run after its replacement has started.
+ * Without this token the old `onDone` pushed its half-finished reply onto
+ * `chatHistory` behind the newer user turn (corrupting the order sent back to
+ * the model), nulled `cancelCurrentStream` out from under the live request —
+ * leaving it un-cancelable and leaking past panel disposal — and posted a
+ * `stream_done` that closed the webview's stream element mid-answer, silently
+ * dropping every later chunk.
+ */
+let chatGeneration = 0;
 
 /** Everything needed to render a post-mortem report for the finished run. */
 let currentRun: RunRecord = emptyRun();
@@ -553,7 +572,7 @@ async function launchAgent(
 
   // Reset Pro telemetry on new run
   metricHistory.clear();
-  agentLog.length = 0;
+  agentLog.clear();
   activeTargetFile = targetFile;
   chatHistory = [];
   const previousBaseline = currentRun.baselineMetrics;
@@ -914,16 +933,21 @@ function openChatPanel(context: vscode.ExtensionContext) {
 
   chatPanel.onDidDispose(() => {
     cancelCurrentStream?.();
+    // chatHistory outlives the panel, so a turn truncated by closing it would
+    // otherwise be replayed to the model as a complete answer on reopen.
+    chatGeneration++;
+    cancelCurrentStream = null;
     chatPanel = undefined;
   });
 
   chatPanel.webview.onDidReceiveMessage(async (msg) => {
     if (msg.command === "chat") {
       cancelCurrentStream?.();
+      const gen = ++chatGeneration;
 
       const systemPrompt = buildSystemPrompt(
         metricHistory.toArray(),
-        agentLog,
+        agentLog.toArray(),
         activeTargetFile,
         currentRun.baselineMetrics
       );
@@ -941,15 +965,23 @@ function openChatPanel(context: vscode.ExtensionContext) {
       cancelCurrentStream = streamChatCompletion(
         chatHistory,
         (chunk) => {
+          if (gen !== chatGeneration) return;
           assistantReply += chunk;
           chatPanel?.webview.postMessage({ type: "stream_chunk", text: chunk });
         },
         () => {
-          chatHistory.push({ role: "assistant", content: assistantReply });
+          if (gen !== chatGeneration) return;
+          // An aborted turn can end with nothing streamed. Pushing an empty
+          // assistant message leaves a blank turn in the history the next
+          // request replays back to the model.
+          if (assistantReply) {
+            chatHistory.push({ role: "assistant", content: assistantReply });
+          }
           chatPanel?.webview.postMessage({ type: "stream_done" });
           cancelCurrentStream = null;
         },
         (err) => {
+          if (gen !== chatGeneration) return;
           chatPanel?.webview.postMessage({ type: "stream_error", text: err });
           cancelCurrentStream = null;
         }
@@ -958,6 +990,7 @@ function openChatPanel(context: vscode.ExtensionContext) {
       chatHistory = [];
     } else if (msg.command === "cancel") {
       cancelCurrentStream?.();
+      chatGeneration++;
       cancelCurrentStream = null;
       chatPanel?.webview.postMessage({ type: "stream_done" });
     }
@@ -996,6 +1029,15 @@ function openGeneratorPanel(context: vscode.ExtensionContext) {
   });
 
   genPanel.webview.onDidReceiveMessage(async (msg) => {
+    if (msg.command === "cancel") {
+      cancelGeneratorStream?.();
+      // Bumping the generation is what actually abandons the request: the
+      // destroyed socket still runs its terminal callback a tick later.
+      generatorGeneration++;
+      cancelGeneratorStream = null;
+      genPanel.webview.postMessage({ type: "done" });
+      return;
+    }
     if (msg.command !== "generate") return;
 
     const req = msg.request as ScriptGenRequest;
@@ -1004,12 +1046,18 @@ function openGeneratorPanel(context: vscode.ExtensionContext) {
     genPanel.webview.postMessage({ type: "generating" });
 
     cancelGeneratorStream?.();
+    // Same generation guard as the chat panel: a destroyed request still fires
+    // its terminal callback a tick later, which otherwise nulled the *new*
+    // stream's cancel handle and ran extract/compile/save-dialog on the
+    // abandoned response.
+    const gen = ++generatorGeneration;
 
     let fullResponse = "";
     cancelGeneratorStream = streamChatCompletion(
       messages,
       (chunk) => { fullResponse += chunk; },
       async () => {
+        if (gen !== generatorGeneration) return;
         cancelGeneratorStream = null;
         if (!generatorPanel) return; // panel closed mid-stream
         const code = extractCodeBlock(fullResponse, req.outputFormat);
@@ -1022,10 +1070,19 @@ function openGeneratorPanel(context: vscode.ExtensionContext) {
           return;
         }
 
-        // Only .py scripts can be syntax-checked with py_compile; .ipynb is JSON,
-        // not Python source, so there is nothing to compile-check here.
+        // .py is checked with py_compile; .ipynb is JSON, so it gets a schema
+        // check instead. `fileText` is what actually reaches disk — the
+        // notebook path rewrites it with the envelope filled in.
+        let fileText = code;
         let syntaxError: string | undefined;
-        if (req.outputFormat === "py") {
+        if (req.outputFormat === "ipynb") {
+          const nb = normalizeNotebook(code);
+          if ("error" in nb) {
+            syntaxError = nb.error;
+          } else {
+            fileText = nb.json;
+          }
+        } else if (req.outputFormat === "py") {
           const tmpFile = path.join(require("os").tmpdir(), `arc_gen_${Date.now()}.py`);
           fs.writeFileSync(tmpFile, code, "utf8");
           try {
@@ -1057,7 +1114,9 @@ function openGeneratorPanel(context: vscode.ExtensionContext) {
 
         if (syntaxError) {
           const choice = await vscode.window.showErrorMessage(
-            `ARC Script Generator: the generated script failed a syntax check — ${syntaxError}`,
+            req.outputFormat === "ipynb"
+              ? `ARC Script Generator: the generated notebook failed its schema check — ${syntaxError}`
+              : `ARC Script Generator: the generated script failed a syntax check — ${syntaxError}`,
             "Save Anyway (Unverified)"
           );
           if (choice !== "Save Anyway (Unverified)") {
@@ -1076,18 +1135,22 @@ function openGeneratorPanel(context: vscode.ExtensionContext) {
         });
 
         if (uri) {
-          fs.writeFileSync(uri.fsPath, code, "utf8");
-          const verified = req.outputFormat === "py" && !syntaxError;
+          fs.writeFileSync(uri.fsPath, fileText, "utf8");
           vscode.window.showInformationMessage(
-            verified
-              ? `✅ ARC-tested script saved: ${path.basename(uri.fsPath)}`
-              : `Script saved (not syntax-verified): ${path.basename(uri.fsPath)}`
+            // "ARC-tested" overclaimed what ran: py_compile parses the file, it
+            // never executes it and never puts it under ARC.
+            syntaxError
+              ? `Script saved (not verified): ${path.basename(uri.fsPath)}`
+              : req.outputFormat === "py"
+                ? `Syntax verified — script saved: ${path.basename(uri.fsPath)}`
+                : `Notebook schema verified — saved: ${path.basename(uri.fsPath)}`
           );
           vscode.window.showTextDocument(uri);
         }
         genPanel.webview.postMessage({ type: "done" });
       },
       (err) => {
+        if (gen !== generatorGeneration) return;
         cancelGeneratorStream = null;
         if (!generatorPanel) return;
         genPanel.webview.postMessage({ type: "error", text: err });
@@ -1455,6 +1518,9 @@ function sendMessage(){
   hideEmpty();
   appendMsg('user',text);
   input.value='';input.style.height='auto';
+  // Latch before the post, not on the stream_start that comes back: the
+  // round-trip left a window where a second Enter queued a second request.
+  setStreaming(true);
   vscode.postMessage({command:'chat',text});
 }
 
@@ -1780,7 +1846,7 @@ textarea{
     <label>Extra requirements (optional)</label>
     <input type="text" id="notes" placeholder="e.g. Mixed precision, cosine LR schedule, gradient clipping">
   </div>
-  <button class="btn-generate" id="btn-gen">Generate ARC-Tested Script</button>
+  <button class="btn-generate" id="btn-gen">Generate Training Script</button>
   <div class="status" id="status-gen">🔄 Generating with ${modelName}... this may take 15–30 seconds.</div>
   <div class="status" id="status-err"></div>
 </div>
@@ -1788,9 +1854,17 @@ textarea{
 const vscode=acquireVsCodeApi();
 let fmt='py';
 function setFormat(f){fmt=f;document.getElementById('btn-py').className='format-btn'+(f==='py'?' active':'');document.getElementById('btn-ipynb').className='format-btn'+(f==='ipynb'?' active':'');}
-function generate(){
+// The one button doubles as Cancel while a stream is open. Closing the panel
+// was previously the only way out of a stuck generation.
+let busy=false;
+function setBusy(on){
+  busy=on;
   const btn=document.getElementById('btn-gen');
-  btn.disabled=true;
+  btn.textContent=on?'Cancel':'Generate Training Script';
+}
+function generate(){
+  if(busy){setBusy(false);hideStatus('status-gen');vscode.postMessage({command:'cancel'});return;}
+  setBusy(true);
   hideStatus('status-gen');
   hideStatus('status-err');
   vscode.postMessage({command:'generate',request:{
@@ -1820,11 +1894,11 @@ window.addEventListener('message',e=>{
     showStatus('status-gen','generating',null);
     hideStatus('status-err');
   } else if(msg.type==='done'){
-    document.getElementById('btn-gen').disabled=false;
+    setBusy(false);
     hideStatus('status-gen');
     hideStatus('status-err');
   } else if(msg.type==='error'){
-    document.getElementById('btn-gen').disabled=false;
+    setBusy(false);
     hideStatus('status-gen');
     showStatus('status-err','error','⚠ Error: '+msg.text);
   }

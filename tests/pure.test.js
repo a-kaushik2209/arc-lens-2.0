@@ -10,7 +10,7 @@ const assert = require("node:assert/strict");
 const path = require("path");
 
 const OUT = path.join(__dirname, "..", "out", "pro");
-const { extractCodeBlock, buildScriptGenMessages } = require(path.join(OUT, "scriptGenerator.js"));
+const { extractCodeBlock, buildScriptGenMessages, normalizeNotebook } = require(path.join(OUT, "scriptGenerator.js"));
 const { buildSystemPrompt } = require(path.join(OUT, "contextBuilder.js"));
 const { buildReportHtml } = require(path.join(OUT, "reportBuilder.js"));
 
@@ -33,6 +33,50 @@ test("extractCodeBlock returns null when there is no fence at all", () => {
 test("extractCodeBlock selects the json fence for notebook output", () => {
   const res = extractCodeBlock('```json\n{"cells": []}\n```', "ipynb");
   assert.equal(res, '{"cells": []}');
+});
+
+// ── normalizeNotebook ───────────────────────────────────────────────────────
+
+test("normalizeNotebook rejects invalid JSON rather than writing it to a .ipynb", () => {
+  const res = normalizeNotebook('{"cells": [],}');
+  assert.ok("error" in res);
+  assert.match(res.error, /not valid JSON/);
+});
+
+test("normalizeNotebook rejects JSON with no cells array", () => {
+  assert.ok("error" in normalizeNotebook('{"nbformat": 4}'));
+  assert.ok("error" in normalizeNotebook('"just a string"'));
+});
+
+test("normalizeNotebook wraps a bare cell array into a v4 notebook", () => {
+  const res = normalizeNotebook('[{"cell_type":"code","source":"import torch"}]');
+  assert.ok("json" in res);
+  const nb = JSON.parse(res.json);
+  assert.equal(nb.nbformat, 4);
+  assert.equal(nb.cells.length, 1);
+  // A code cell Jupyter will open needs both of these present.
+  assert.deepEqual(nb.cells[0].outputs, []);
+  assert.equal(nb.cells[0].execution_count, null);
+  assert.ok(nb.metadata.kernelspec);
+});
+
+test("normalizeNotebook keeps an already-valid notebook's own envelope", () => {
+  const src = {
+    cells: [{ cell_type: "markdown", source: ["# Title"], metadata: {} }],
+    metadata: { kernelspec: { name: "conda-env" } },
+    nbformat: 4,
+    nbformat_minor: 2,
+  };
+  const res = normalizeNotebook(JSON.stringify(src));
+  assert.ok("json" in res);
+  const nb = JSON.parse(res.json);
+  assert.equal(nb.nbformat_minor, 2);
+  assert.equal(nb.metadata.kernelspec.name, "conda-env");
+});
+
+test("normalizeNotebook rejects a cell missing cell_type or source", () => {
+  assert.ok("error" in normalizeNotebook('{"cells":[{"source":"x"}]}'));
+  assert.ok("error" in normalizeNotebook('{"cells":[{"cell_type":"code"}]}'));
 });
 
 // ── buildScriptGenMessages ──────────────────────────────────────────────────
