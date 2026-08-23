@@ -15,6 +15,10 @@
   <img src="https://img.shields.io/badge/PyTorch-instrumented%20externally-ee4c2c" alt="PyTorch">
 </p>
 
+<p align="center">
+  <a href="https://pyarc.pages.dev/lens"><strong>pyarc.pages.dev/lens</strong></a>
+</p>
+
 ---
 
 ARC Lens watches a training run and streams its optimisation telemetry to a dashboard. When the
@@ -22,7 +26,8 @@ run starts to fail, it restores the model to a healthy checkpoint, lowers the le
 turns on gradient clipping. Your training code does not change.
 
 It is the IDE frontend for the **ARC (Autonomic Recovery Controller)** framework, built on the
-[`arc-training`](https://pypi.org/project/arc-training/) package.
+[`arc-training`](https://pypi.org/project/arc-training/) package. Feature overview and
+configuration reference: [pyarc.pages.dev/lens](https://pyarc.pages.dev/lens).
 
 > **Everything here is the real implementation.** No injected failures, no scripted curves, no
 > synthesised metrics. Charts show measurements or they show gaps.
