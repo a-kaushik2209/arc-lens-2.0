@@ -127,3 +127,13 @@ Icon\r
 
 # Private Backups
 private_backup/
+
+# Local agent config and scratch notes
+.claude/
+ROUND2_PLAN.md
+ROUND2_CRITIQUE_AND_SUGGESTIONS.md
+FAR_AWAY_2026_Task_*.txt
+*.jpeg
+*.jpg
+docs/
+CARBON_FOOTPRINT.md

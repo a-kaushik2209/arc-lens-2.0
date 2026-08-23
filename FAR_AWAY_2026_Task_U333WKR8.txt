@@ -1,7 +1,0 @@
-FAR AWAY 2026 — ROUND 2 CHALLENGE STATEMENT
-Team: Heisen-bug (U333WKR8)
-Challenge #171: Accessibility: Resource Waste Reduction
-
-Improve the part of your existing MVP most related to accessibility so that it can reduce unnecessary use of time, bandwidth, storage, computation, or repeated user effort. The experience should clearly show success, failure, current status, and next steps.
-
-Good luck!

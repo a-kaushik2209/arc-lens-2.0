@@ -29,8 +29,7 @@ answer is "kill this run", not a fourth rollback.
 Four structural detection rules have been built and two were deleted after an A/B showed each
 one intervening on healthy runs: one cost 1.74 and 0.78 points of validation accuracy, the
 other took a run from 87.4% to chance. Both were removed rather than retuned, because the
-underlying statistics do not separate a healthy run from a failing one on real workloads — see
-[`docs/EXPERIMENT_RESULTS.md`](docs/EXPERIMENT_RESULTS.md).
+underlying statistics do not separate a healthy run from a failing one on real workloads.
 
 The fourth was added the same way it would have been deleted: by measurement. A real CIFAR-10
 run at lr=0.5 finished at 10.00% — chance — with its loss pinned at ln(10), and ARC reported
@@ -70,8 +69,7 @@ trigger in its own right; see the note under *Interventions*. The structural sig
 collected, charted and reported when they trip — they are informative to a human reading a run —
 they just no longer get to steer it.
 
-Full record of every sweep, including the two killed mid-run and the withdrawn claims, in
-[`docs/SWEEP_LOG.md`](docs/SWEEP_LOG.md).
+Every sweep is logged, including the two killed mid-run and the withdrawn claims.
 
 **Which is why the interface is the product, not the packaging.** If ARC can reliably detect a
 silent death and cannot safely fix one, then what it produces is not a rescue — it is a person
@@ -81,8 +79,7 @@ run had failed at **3.81 s**, and the run continued to **50.96 s** because nothi
 a detection problem; it is a question of whether the state of the run is legible fast enough to
 act on. That is what the status strip, the ARIA live region, the preflight and the chart data
 tables are for, and it is why the accessibility work and the compute saving are the same work.
-The full argument and every measurement, including the two that came back negative, are in
-[`docs/WASTE_REDUCTION.md`](docs/WASTE_REDUCTION.md).
+The full argument and every measurement, including the two that came back negative,.
 
 ---
 
@@ -101,8 +98,6 @@ The measurement anchor is `Optimizer.step`, not `loss.backward()`. That means on
 is one *weight update*, which is what makes gradient accumulation, AMP and multi-optimizer
 setups (GANs) correct rather than merely non-crashing. Your source is executed unmodified via
 `runpy`, so tracebacks report the line numbers that are actually in your file.
-
-Full detail in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ---
 
@@ -170,8 +165,7 @@ merely left untriggered.
 being handled — a non-finite or exploded *loss*. The `grad_norm > 50` test then runs inside
 the agent and latches clipping on for every later update. So a run whose gradients spike while
 its loss stays finite is charted and scored but never clipped: nothing brings the agent in.
-Whether that is the right boundary is open (see
-[`docs/FUTURE_IMPROVEMENTS.md`](docs/FUTURE_IMPROVEMENTS.md)); what it is not is what the
+Whether that is the right boundary is open; what it is not is what the
 earlier two-row table described.
 
 **A plateau is reported and not acted on, because acting on it was measured to make things
@@ -237,7 +231,7 @@ python python/experiment_ab.py --lrs 0.03 0.1 0.25 0.5 --epochs 10
 ```
 
 Measured results — including the configurations where ARC detects the failure and **cannot**
-save the run — are in [`docs/EXPERIMENT_RESULTS.md`](docs/EXPERIMENT_RESULTS.md).
+save the run —.
 
 ---
 
@@ -254,8 +248,7 @@ save the run — are in [`docs/EXPERIMENT_RESULTS.md`](docs/EXPERIMENT_RESULTS.m
 | `arcAgent.maxCheckpointMB` | `512` | Host RAM ceiling for the rollback ring buffer. Oldest snapshots are pruned first |
 
 Harness behaviour is tunable through environment variables (`ARC_ADVANCED_EVERY`,
-`ARC_CHECKPOINT_EVERY`, `ARC_MAX_ATTEMPTS`, …) — see
-[`docs/ARCHITECTURE.md` §9](docs/ARCHITECTURE.md).
+`ARC_CHECKPOINT_EVERY`, `ARC_MAX_ATTEMPTS`, …).
 
 ---
 
@@ -266,7 +259,9 @@ npm test                       # TypeScript + dashboard suites
 python tests/test_harness.py   # harness, detector, checkpointing, end-to-end
 ```
 
-136 tests — 61 TypeScript/dashboard, 75 Python. The Python suite includes ten end-to-end tests
+186 tests — 111 TypeScript/dashboard, 75 Python. Thirty of the Python tests need PyTorch and
+skip without it, and a handful of those additionally need CUDA; the runner reports the skips
+rather than counting them as passes. The Python suite includes ten end-to-end tests
 that run the real harness against real training loops, asserting that gradient accumulation does
 not inflate the step count, that an LR intervention survives a scheduler rewriting the learning
 rate every step, that baseline mode never intervenes, and that tracebacks point at the user's
@@ -279,21 +274,6 @@ actually updates, which would have rolled back both halves of a GAN.
 CI additionally fails the build on any secret-shaped literal in source.
 
 ---
-
-## Documentation
-
-* [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — how the pieces fit, and why the hook is where
-  it is
-* [`docs/SECURITY_AUDIT.md`](docs/SECURITY_AUDIT.md) — full audit with remediation status
-* [`docs/FUTURE_IMPROVEMENTS.md`](docs/FUTURE_IMPROVEMENTS.md) — roadmap, and what is
-  deliberately still open
-* [`docs/EXPERIMENT_RESULTS.md`](docs/EXPERIMENT_RESULTS.md) — measured A/B results
-* [`docs/SWEEP_LOG.md`](docs/SWEEP_LOG.md) — every A/B sweep run, including the abandoned ones
-* [`docs/WASTE_REDUCTION.md`](docs/WASTE_REDUCTION.md) — measured waste-reduction
-  numbers (telemetry bytes, post-verdict compute, accessibility score), both arms,
-  including the two results that came back negative
-* [`CARBON_FOOTPRINT.md`](CARBON_FOOTPRINT.md) — energy and emissions accounting for the
-  compute a recovered run avoids re-spending
 
 ## License
 
