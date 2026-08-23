@@ -6,11 +6,11 @@
   "publisher": "arclens",
   "repository": {
     "type": "git",
-    "url": "https://github.com/x3mitul/arc-lens.git"
+    "url": "https://github.com/a-kaushik2209/arc-lens-2.0.git"
   },
-  "homepage": "https://github.com/x3mitul/arc-lens",
+  "homepage": "https://github.com/a-kaushik2209/arc-lens-2.0#readme",
   "bugs": {
-    "url": "https://github.com/x3mitul/arc-lens/issues"
+    "url": "https://github.com/a-kaushik2209/arc-lens-2.0/issues"
   },
   "license": "AGPL-3.0-only",
   "icon": "media/logo.png",
@@ -30,7 +30,7 @@
     "commands": [
       {
         "command": "arc-lens.run",
-        "title": "▶ Run with ARC Lens",
+        "title": "\u25b6 Run with ARC Lens",
         "category": "ARC Lens",
         "icon": {
           "light": "media/logo_dark.png",
@@ -39,7 +39,7 @@
       },
       {
         "command": "arc-lens.stop",
-        "title": "⏹ Stop ARC Lens",
+        "title": "\u23f9 Stop ARC Lens",
         "category": "ARC Lens",
         "icon": "$(debug-stop)"
       },
@@ -80,12 +80,12 @@
           "type": "string",
           "default": "python3",
           "scope": "machine",
-          "description": "Path to the Python interpreter to use (e.g. /home/user/.venv/bin/python). Cannot be set by workspace settings — this value is executed, and a cloned repo's .vscode/settings.json must not be able to silently point it at an arbitrary binary."
+          "description": "Path to the Python interpreter to use (e.g. /home/user/.venv/bin/python). Cannot be set by workspace settings \u2014 this value is executed, and a cloned repo's .vscode/settings.json must not be able to silently point it at an arbitrary binary."
         },
         "arcAgent.stepDelay": {
           "type": "number",
           "default": 0,
-          "description": "Artificial delay (in seconds) added after each training step. Default 0 — this exists only for slowing a fast demo down enough to watch, and any non-zero value is real GPU time being thrown away."
+          "description": "Artificial delay (in seconds) added after each training step. Default 0 \u2014 this exists only for slowing a fast demo down enough to watch, and any non-zero value is real GPU time being thrown away."
         },
         "arcAgent.gpuHourlyRate": {
           "type": "number",
@@ -96,12 +96,12 @@
           "type": "string",
           "default": "",
           "scope": "machine",
-          "description": "API key for the AI features. The provider is detected from the prefix: sk-or-… (OpenRouter), gsk_… (Groq), sk-ant-… (Anthropic), AIzaSy… (Google), sk-… (OpenAI). Not workspace-overridable: a cloned repo's .vscode/settings.json must not be able to redirect your API key or the telemetry sent with it."
+          "description": "API key for the AI features. The provider is detected from the prefix: sk-or-\u2026 (OpenRouter), gsk_\u2026 (Groq), sk-ant-\u2026 (Anthropic), AIzaSy\u2026 or AQ.\u2026 (Google), sk-\u2026 (OpenAI). Not workspace-overridable: a cloned repo's .vscode/settings.json must not be able to redirect your API key or the telemetry sent with it."
         },
         "arcAgent.llmModel": {
           "type": "string",
           "default": "google/gemini-2.5-flash:free",
-          "description": "[Pro] OpenRouter model string to use for AI features."
+          "description": "Model for the AI features. OpenRouter takes a full \"vendor/model:tier\" string; for a native provider key the equivalent bare model id is sent instead."
         },
         "arcAgent.maxCheckpointMB": {
           "type": "number",
@@ -112,7 +112,7 @@
           "type": "number",
           "default": 1,
           "minimum": 1,
-          "description": "Emit one dashboard metric event every N optimizer steps. 1 sends every step. Raising it cuts telemetry volume roughly proportionally — measured at -72.2% for N=10 over a fixed 390-step run, with no wall-clock cost — at the price of coarser chart resolution. Risk detection is unaffected: loss history and the risk score are computed every step regardless, and emission densifies automatically while risk is elevated."
+          "description": "Emit one dashboard metric event every N optimizer steps. 1 sends every step. Raising it cuts telemetry volume roughly proportionally \u2014 measured at -72.2% for N=10 over a fixed 390-step run, with no wall-clock cost \u2014 at the price of coarser chart resolution. Risk detection is unaffected: loss history and the risk score are computed every step regardless, and emission densifies automatically while risk is elevated."
         }
       }
     }
@@ -128,5 +128,14 @@
     "@types/vscode": "^1.85.0",
     "@types/node": "^20.0.0",
     "typescript": "^5.3.0"
-  }
+  },
+  "keywords": [
+    "pytorch",
+    "machine-learning",
+    "training",
+    "monitoring",
+    "mlops",
+    "deep-learning",
+    "observability"
+  ]
 }
