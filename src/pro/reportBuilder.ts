@@ -52,6 +52,35 @@ const GPU_RATE_TABLE: Array<[RegExp, number, string, number]> = [
 const DEFAULT_GPU_RATE = 1.0;
 const DEFAULT_GPU_WATTS = 250;
 
+/**
+ * World-average grid intensity, IEA Emissions Factors 2023: 436 gCO2 per kWh.
+ *
+ * Wrong for any specific datacentre by design — Nordic hydro is a fraction of
+ * it, a coal-heavy grid rather more — which is why every figure derived from it
+ * renders inside an `.assumption` span beside the wattage it came from. It
+ * exists so a kWh number means something to a reader, not to certify emissions.
+ *
+ * Duplicated in `media/dashboard.html`, which cannot import from here. A test
+ * asserts the two stay equal.
+ */
+export const GRID_CO2_GRAMS_PER_KWH = 436;
+
+/** Grams of CO2 is not a unit anyone has intuition for; the comparison carries it. */
+export function carbonComparison(grams: number): string {
+  const carKm = grams / 120; // EU new-car fleet average, ~120 gCO2/km
+  const phones = grams / 8.5; // one smartphone charge, IEA
+  const ledHours = grams / 4.36; // a 10W LED bulb at world-average grid
+  if (carKm >= 1) return `about ${carKm.toFixed(1)} km of driving`;
+  if (phones >= 1) return `about ${phones.toFixed(1)} phone charges`;
+  return `about ${ledHours.toFixed(1)} hours of a 10W bulb`;
+}
+
+export function fmtCarbon(grams: number): string {
+  if (grams >= 1000) return (grams / 1000).toFixed(2) + " kg CO2";
+  if (grams >= 1) return grams.toFixed(0) + " g CO2";
+  return grams.toFixed(2) + " g CO2";
+}
+
 function resolveGpuRate(env: Record<string, unknown>): { rate: number; source: string; watts: number } {
   const gpuName = typeof env.gpu === "string" ? env.gpu : "";
   const configuredRate = typeof env.gpuHourlyRate === "number" ? env.gpuHourlyRate : 0;
@@ -265,7 +294,10 @@ export function buildReportHtml(run: RunRecord, metrics: ReportMetric[]): string
       ` ⏱ ${mins}m ${secs}s burned ${since}.` +
       ` <span class="assumption">💸 ~$${dollars.toFixed(2)} at $${rate.toFixed(2)}/hr (${escapeHtml(
         source
-      )}) · 🔌 ~${kwh.toFixed(2)} kWh assuming ${watts}W typical draw for this tier.</span>`;
+      )}) · 🔌 ~${kwh.toFixed(2)} kWh assuming ${watts}W typical draw for this tier` +
+      ` · 🌍 ~${fmtCarbon(kwh * GRID_CO2_GRAMS_PER_KWH)}, ${carbonComparison(
+        kwh * GRID_CO2_GRAMS_PER_KWH
+      )}, at the world-average grid.</span>`;
   }
 
   const verdict = unrecoverable.length

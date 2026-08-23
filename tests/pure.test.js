@@ -12,7 +12,8 @@ const path = require("path");
 const OUT = path.join(__dirname, "..", "out", "pro");
 const { extractCodeBlock, buildScriptGenMessages, normalizeNotebook } = require(path.join(OUT, "scriptGenerator.js"));
 const { buildSystemPrompt } = require(path.join(OUT, "contextBuilder.js"));
-const { buildReportHtml } = require(path.join(OUT, "reportBuilder.js"));
+const fs = require("fs");
+const { buildReportHtml, carbonComparison, GRID_CO2_GRAMS_PER_KWH } = require(path.join(OUT, "reportBuilder.js"));
 
 // ── extractCodeBlock ────────────────────────────────────────────────────────
 
@@ -228,6 +229,29 @@ test("buildReportHtml labels the unrecoverable waste estimate, never a bare numb
   assert.match(html, /class="assumption"/);
   assert.match(html, /~\$[\d.]+ at \$[\d.]+\/hr \(RTX 3050/);
   assert.match(html, /~[\d.]+ kWh assuming \d+W typical draw/);
+  assert.match(html, /~[\d.]+ g CO2, about [\d.]+ (km of driving|phone charges|hours of a 10W bulb)/);
+  // The CO2 figure is an estimate off a single global grid constant, so it may
+  // only ever appear inside the labelled-assumption span.
+  const assumption = /<span class="assumption">([\s\S]*?)<\/span>/.exec(html);
+  assert.ok(assumption && assumption[1].includes("CO2"), "CO2 must render inside .assumption");
+});
+
+test("the carbon comparison switches unit as the number shrinks", () => {
+  // A bare gram count means nothing to a reader; the comparison is the part
+  // that carries it, so it has to stay in a range a person can picture.
+  assert.match(carbonComparison(1200), /km of driving/);
+  assert.match(carbonComparison(40), /phone charges/);
+  assert.match(carbonComparison(5), /hours of a 10W bulb/);
+});
+
+test("the grid constant in the dashboard matches the one in reportBuilder", () => {
+  // Two copies exist because dashboard.html cannot import from src/. If they
+  // drift, the exported report and the live banner quote different CO2 for the
+  // same run, and the report is the artefact someone keeps.
+  const dashboard = fs.readFileSync(path.join(__dirname, "..", "media", "dashboard.html"), "utf8");
+  const match = /const GRID_CO2_GRAMS_PER_KWH = (\d+)/.exec(dashboard);
+  assert.ok(match, "dashboard.html must define GRID_CO2_GRAMS_PER_KWH");
+  assert.equal(Number(match[1]), GRID_CO2_GRAMS_PER_KWH);
 });
 
 test("buildReportHtml surfaces a checkpoint_budget event with its pruned count", () => {

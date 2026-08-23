@@ -1570,6 +1570,32 @@ function bytesNotSent() {
   return Math.max(0, highest - metricEventsReceived) * MEAN_METRIC_BYTES;
 }
 
+// World-average grid intensity, IEA Emissions Factors 2023: 436 gCO2 per kWh of
+// generated electricity. A single global constant is wrong for any specific
+// datacentre — a run on Nordic hydro emits a fraction of this, one on a
+// coal-heavy grid rather more — which is why the figure is always rendered
+// inside an .assumption span next to the wattage it was derived from. It is
+// there to make a kWh number mean something to a reader, not to certify anyone's
+// emissions.
+const GRID_CO2_GRAMS_PER_KWH = 436;
+
+// Grams of CO2 is not a unit anyone has intuition for either, so the comparison
+// carries the meaning: the number is the claim, the comparison is the handle.
+function carbonComparison(grams) {
+  const carKm = grams / 120;          // EU new-car fleet average, ~120 gCO2/km
+  const phones = grams / 8.5;         // one smartphone charge, IEA
+  const ledHours = grams / 4.36;      // a 10W LED bulb at world-average grid
+  if (carKm >= 1) return `about ${carKm.toFixed(1)} km of driving`;
+  if (phones >= 1) return `about ${phones.toFixed(1)} phone charges`;
+  return `about ${ledHours.toFixed(1)} hours of a 10W bulb`;
+}
+
+function fmtCarbon(grams) {
+  if (grams >= 1000) return (grams / 1000).toFixed(2) + ' kg CO2';
+  if (grams >= 1) return grams.toFixed(0) + ' g CO2';
+  return grams.toFixed(2) + ' g CO2';
+}
+
 // A short run at 3 dp reads "0.000 kWh", which looks like a broken tile rather
 // than a small number.
 function fmtEnergy(kwh) {
@@ -2033,7 +2059,9 @@ function handleMessage(msg) {
         wasteEl.innerHTML =
           `⏱ ${mins}m ${secs}s burned ${escapeText(since)}<br>` +
           `<span class="assumption">💸 ~$${dollars.toFixed(2)} at $${gpuRate.toFixed(2)}/hr (${escapeText(gpuRateSource)}) · ` +
-          `🔌 ~${kwh.toFixed(2)} kWh assuming ${gpuWatts}W typical draw for this tier — stop now to avoid spending more.</span>`;
+          `🔌 ~${kwh.toFixed(2)} kWh assuming ${gpuWatts}W typical draw for this tier · ` +
+          `🌍 ~${fmtCarbon(kwh * GRID_CO2_GRAMS_PER_KWH)}, ${carbonComparison(kwh * GRID_CO2_GRAMS_PER_KWH)}, ` +
+          `at the world-average grid. Stop now to avoid spending more.</span>`;
       } else {
         wasteEl.textContent = '';
       }
