@@ -114,6 +114,7 @@ spent after the answer was already known.**
 | Bandwidth and storage | **62.9% to 72.2% fewer telemetry bytes**, at no wall-clock cost | Total stdout bytes over a fixed 390 steps, same seed and workload |
 | Computation, stopping | About **90% of a failing run's compute** is burned after the verdict is available | Two runs, timestamped event stream |
 | Computation, intervention | **7 failure events reduced to 1**, at 1.8% overhead | A/B on the same configuration |
+| Cost and energy | Preserved compute priced live, in dollars and kWh, always labelled with its source | GPU-matched list rate or your configured rate; tier-typical wattage |
 | Storage | Checkpoint RAM budget correctly overrides the count cap | Direct observation |
 | Accessibility | Lighthouse **87 to 100** | Lighthouse 13.4.1, desktop, navigation mode |
 | Repeated effort, preflight | Named cause and named fix before launch, instead of a traceback | Timed against an uninstrumented launch, n=5 |
@@ -139,6 +140,19 @@ configuration, run with and without interventions, ARC turned **7 failure events
 into 1** while adding 1.8% overhead. The run that would have thrown seven
 numerical failures threw one, and the cost of getting that was under two percent
 of step time.
+
+**The dashboard prices the waste, in money and in energy.** Saved compute is
+shown as a live ledger: time preserved by a rollback, an estimated cost, and an
+estimated energy figure in kWh. The hourly rate is your configured
+`arcAgent.gpuHourlyRate` when you set one, and otherwise an on-demand list price
+matched to the GPU the run actually reported, with the source named beside the
+number every time. The energy figure uses tier-typical board wattage for the same
+device. Both are labelled as estimates wherever they appear, because an
+unlabelled dollar amount would be the same fabrication problem as an unlabelled
+metric, and the unrecoverable banner says so outright: it reads as an estimate at
+a stated wattage, next to the instruction to stop now and avoid spending more.
+This is what turns "your run died forty seconds ago" into a number a person acts
+on.
 
 **Storage stays bounded.** The checkpoint ring buffer runs to a RAM budget that
 overrides the count cap, pruning oldest first. A long run cannot quietly consume
