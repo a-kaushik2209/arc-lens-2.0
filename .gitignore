@@ -53,7 +53,7 @@ pip-delete-this-directory.txt
 .ropeproject
 
 # Runtime logs, temporary files, and local databases
-# NOTE: data/ is ignored, but docs/*.json (benchmark and experiment results) is
+# NOTE: data/ is ignored; the measurement JSON lives in results/ and is tracked,
 # not — those are measured evidence and belong in the repository.
 data/
 .bench_workload.py

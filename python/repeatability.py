@@ -112,7 +112,7 @@ def main() -> int:
     else:
         print("\n  Not enough completed runs to compute a spread.")
 
-    path = REPO / "docs" / f"repeatability_lr{args.lr}.json"
+    path = REPO / "results" / f"repeatability_lr{args.lr}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(out, indent=2), encoding="utf-8")
     print(f"\nWrote {path.relative_to(REPO)}")

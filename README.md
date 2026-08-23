@@ -171,8 +171,9 @@ Both arms use the same seed and the same data order.
 python python/experiment_ab.py --lrs 0.03 0.1 0.25 0.5 --epochs 10
 ```
 
-Every sweep is logged, including the two killed mid-run and the withdrawn claims. What those
-sweeps found, in order:
+The raw output of every sweep quoted below is committed under [`results/`](results/), so the
+numbers here can be checked against the files the scripts actually wrote. What those sweeps
+found, in order:
 
 **Two rules were deleted for firing on healthy runs.** One cost 1.74 and 0.78 points of
 validation accuracy; the other took a run from 87.4% to chance.

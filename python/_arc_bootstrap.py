@@ -152,7 +152,7 @@ MAX_CHECKPOINT_MB = _env_float("ARC_MAX_CHECKPOINT_MB", 512.0)
 # expensive collectors are sampled. Sampling goes dense automatically while risk
 # is elevated (see _should_sample_advanced).
 # Measured on an RTX 3050 with a 2.79M-parameter CNN (see
-# python/benchmark_overhead.py and docs/benchmark_overhead.json): sampling the
+# python/benchmark_overhead.py and results/benchmark_overhead.json): sampling the
 # expensive collectors every 25 steps costs 8.4% wall-clock, while sampling them
 # every step costs 170%. Instability signatures develop over tens of steps, so
 # the dense setting buys nothing but cost.

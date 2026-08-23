@@ -14,7 +14,7 @@ effects. Wall-clock A/B has neither problem.
     python python/benchmark_overhead.py --steps 300 --batch 128
 
 Prints a table suitable for pasting into the README, and writes
-``docs/benchmark_overhead.json``.
+``results/benchmark_overhead.json``.
 """
 
 from __future__ import annotations
@@ -136,7 +136,7 @@ def main() -> int:
               f"{row['ms_per_step']:>8.2f} | {row['overhead_percent']:>8.1f}% |")
     print()
 
-    out = REPO / "docs" / "benchmark_overhead.json"
+    out = REPO / "results" / "benchmark_overhead.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({
         "device": device,

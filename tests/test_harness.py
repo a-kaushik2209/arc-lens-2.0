@@ -82,9 +82,9 @@ class TestShippedDataFiles(unittest.TestCase):
     """
 
     def test_every_committed_json_loads_with_a_plain_open(self):
-        docs = REPO / "docs"
-        files = sorted(docs.glob("*.json"))
-        self.assertTrue(files, "no JSON found under docs/ — has the layout moved?")
+        results = REPO / "results"
+        files = sorted(results.glob("*.json"))
+        self.assertTrue(files, "no JSON found under results/ — has the layout moved?")
         for path in files:
             with self.subTest(path=path.name):
                 with open(path) as fh:          # deliberately no encoding= override
@@ -94,7 +94,7 @@ class TestShippedDataFiles(unittest.TestCase):
                         self.fail(f"{path.name} does not parse with a plain open(): {exc}")
 
     def test_no_committed_json_starts_with_a_byte_order_mark(self):
-        for path in sorted((REPO / "docs").glob("*.json")):
+        for path in sorted((REPO / "results").glob("*.json")):
             with self.subTest(path=path.name):
                 self.assertFalse(
                     path.read_bytes().startswith(b"\xef\xbb\xbf"),

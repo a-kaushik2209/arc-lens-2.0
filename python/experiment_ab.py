@@ -19,7 +19,7 @@ save it, which are reported alongside the ones where it can.
 
     python python/experiment_ab.py --lrs 0.05 0.15 0.5 --epochs 8
 
-Writes docs/experiment_ab.json and prints a comparison table.
+Writes results/experiment_ab.json and prints a comparison table.
 """
 
 from __future__ import annotations
@@ -116,7 +116,7 @@ def main() -> int:
     print(f"ARC Lens A/B — {len(args.lrs)} learning rate(s) x 2 arms x {args.epochs} epochs")
     print("Identical seed and data order in both arms; only interventions differ.\n")
 
-    out = REPO / "docs" / "experiment_ab.json"
+    out = REPO / "results" / "experiment_ab.json"
     out.parent.mkdir(parents=True, exist_ok=True)
 
     def save() -> None:
