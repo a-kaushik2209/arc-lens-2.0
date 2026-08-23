@@ -33,9 +33,9 @@ configuration reference: [pyarc.pages.dev/lens](https://pyarc.pages.dev/lens).
 > synthesised metrics. Charts show measurements or they show gaps.
 
 **Contents**: [Quick start](#quick-start) · [What it does](#what-it-does) ·
-[How it works](#how-it-works) · [Telemetry](#telemetry) · [Interventions](#interventions) ·
-[Overhead](#overhead) · [Evidence](#evidence) · [Configuration](#configuration) ·
-[Tests](#tests)
+[Waste reduction](#waste-reduction) · [How it works](#how-it-works) ·
+[Telemetry](#telemetry) · [Interventions](#interventions) · [Overhead](#overhead) ·
+[Evidence](#evidence) · [Configuration](#configuration) · [Tests](#tests)
 
 ---
 
@@ -92,12 +92,67 @@ report-only, each time because an A/B said so. The full record is under
 
 That last point is why the interface, and not the automation, is the product. Where ARC can
 detect a silent death but cannot safely fix one, what it produces is a person told in time, in
-terms they can act on. In a diverging baseline run, ARC knew the run had failed at **3.81 s**.
-The run continued to **50.96 s** because nothing stopped it, so **92.5% of that compute was
-spent after the answer was already known**. Closing that gap is a legibility problem rather than
-a detection one. That is what the status strip, the ARIA live region, the preflight and the
-chart data tables are for, and it is why the accessibility work and the compute saving turned
-out to be the same work.
+terms they can act on. Closing that gap is a legibility problem rather than a detection one,
+which is what the status strip, the ARIA live region, the preflight and the chart data tables
+are for, and it is why the accessibility work and the compute saving turned out to be the same
+work. Measured in [Waste reduction](#waste-reduction).
+
+---
+
+## Waste reduction
+
+A run that has already failed keeps burning GPU until a person notices. So how
+fast the state of a run becomes legible is not a separate concern from how much
+compute it wastes. It is the same concern, and it is measurable.
+
+In a diverging baseline run, ARC knew the run had failed at **3.81 s**. The run
+continued to **50.96 s** because nothing stopped it. **92.5% of that compute was
+spent after the answer was already known.**
+
+| Dimension | Measured result | How it was measured |
+| :--- | :--- | :--- |
+| Bandwidth and storage | **62.9% to 72.2% fewer telemetry bytes**, at no wall-clock cost | Total stdout bytes over a fixed 390 steps, same seed and workload |
+| Computation, stopping | About **90% of a failing run's compute** is burned after the verdict is available | Two runs, timestamped event stream |
+| Computation, intervention | **7 failure events reduced to 1**, at 1.8% overhead | A/B on the same configuration |
+| Storage | Checkpoint RAM budget correctly overrides the count cap | Direct observation |
+| Accessibility | Lighthouse **87 to 100** | Lighthouse 13.4.1, desktop, navigation mode |
+| Time, preflight | No meaningful wall-clock saving on this workload | Reported as a null result, see below |
+
+**Telemetry.** `arcAgent.telemetryEvery` emits one metric event every N optimizer
+steps. At N=10 that is 40 events and 30,019 bytes against 390 events and 108,053
+bytes, a 72.2% cut, with wall clock flat across all arms at 17.3 to 17.6 s.
+Coalescing gates only the emit call, so loss history and the risk score are still
+computed every step and detection is not delayed. The default is 1, which means a
+default install gets none of this reduction. Raising it is a decision about chart
+resolution, not about safety.
+
+**Stopping.** After three failed recoveries of the same kind, ARC declares the run
+unrecoverable and says so, instead of rolling back forever. Everything after that
+verdict is compute spent on an answer already known.
+
+**Accessibility.** The Round 2 work, which is ARIA live regions, a status strip,
+data-table equivalents for every chart, focus-visible styles and
+`prefers-reduced-motion`, moved the dashboard from 87 to 93 and raised passing
+audits from 34 to 42. Two failures survived and were then fixed: `color-contrast`
+on two labels using a token that measured 2.72:1 against the 4.5:1 AA threshold,
+now 5.49:1 in dark and 5.28:1 in light, and `landmark-one-main`, since the
+document had a `<header>` but no `<main>`. A manual screen-reader pass has not
+been done, and no claim is made about one.
+
+**The preflight arm did not work.** It was meant to save launch time by probing
+the interpreter, torch, CUDA and syntax before spawning. On this workload it
+saves nothing, because `runner.py` imports torch and compiles the script early
+enough that the same errors surface in about the same time. It is reported here
+as a null result rather than dropped. What it does buy is a named cause and a
+named fix instead of a traceback, which is a repeated-effort saving rather than a
+wall-clock one.
+
+The four states the dashboard has to make legible are handled as follows. Current
+status is the status strip and the live region. Success is a completed run with
+an empty action log. Failure is named by `kind`, so `numerical`, `loss_plateau`
+and `representation_collapse` appear as themselves rather than as an unexplained
+anomaly. Next steps come from the preflight before launch and from the
+unrecoverable stop during the run.
 
 ---
 
